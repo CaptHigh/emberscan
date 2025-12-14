@@ -3,7 +3,6 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/emberscan/emberscan/ci.yml?branch=main)](https://github.com/CaptHigh/emberscan/actions)
-[![codecov](https://codecov.io/gh/emberscan/emberscan/branch/main/graph/badge.svg)](https://codecov.io/gh/emberscan/emberscan)
 
 **EmberScan** is an automated embedded hardware firmware security scanner that extracts, emulates, and analyzes firmware from routers, switches, IP cameras, SBCs, and other IoT/embedded devices.
 
@@ -67,14 +66,14 @@ pip install emberscan
 
 **From Source:**
 ```bash
-git clone https://github.com/emberscan/emberscan.git
+git clone https://github.com/CaptHigh/emberscan.git
 cd emberscan
 pip install -e ".[dev]"
 ```
 
 **Using Docker:**
 ```bash
-docker pull emberscan/emberscan:latest
+docker pull CaptHigh/emberscan:latest
 docker run -v $(pwd)/firmware:/data emberscan scan /data/firmware.bin
 ```
 
