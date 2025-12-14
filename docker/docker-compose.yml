@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # EmberScan Scanner Service
+  # ==========================================================================
+  emberscan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: emberscan/emberscan:latest
+    container_name: emberscan
+    volumes:
+      - ./firmware:/data/firmware:ro
+      - ./reports:/data/reports
+      - ./workspace:/app/workspace
+      - ./configs:/app/configs:ro
+    environment:
+      - EMBERSCAN_WORKSPACE=/app/workspace
+      - EMBERSCAN_LOG_LEVEL=INFO
+    # For QEMU network access
+    privileged: true
+    networks:
+      - emberscan-net
+    # Override default command for interactive use
+    # command: scan /data/firmware/target.bin --output /data/reports
+
+  # ==========================================================================
+  # EmberScan Web UI (Future)
+  # ==========================================================================
+  # emberscan-web:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.web
+  #   ports:
+  #     - "5000:5000"
+  #   depends_on:
+  #     - emberscan
+  #   networks:
+  #     - emberscan-net
+
+  # ==========================================================================
+  # CVE Database Service
+  # ==========================================================================
+  cve-db:
+    image: postgres:15-alpine
+    container_name: emberscan-cve-db
+    environment:
+      POSTGRES_DB: emberscan_cve
+      POSTGRES_USER: emberscan
+      POSTGRES_PASSWORD: emberscan_secret
+    volumes:
+      - cve-db-data:/var/lib/postgresql/data
+    networks:
+      - emberscan-net
+    profiles:
+      - full
+
+  # ==========================================================================
+  # Redis Cache (for future distributed scanning)
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: emberscan-redis
+    networks:
+      - emberscan-net
+    profiles:
+      - full
+
+networks:
+  emberscan-net:
+    driver: bridge
+
+volumes:
+  cve-db-data:

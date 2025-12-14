@@ -1,0 +1,183 @@
+# EmberScan Configuration File
+# Copy this file to emberscan.yaml and customize as needed
+
+# =============================================================================
+# General Settings
+# =============================================================================
+
+# Project name for reports
+project_name: EmberScan
+
+# Working directory for temporary files and outputs
+workspace_dir: ./workspace
+
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level: INFO
+
+# Log file path (optional, logs to console if not set)
+log_file: null
+
+# =============================================================================
+# QEMU Emulation Settings
+# =============================================================================
+
+qemu:
+  # Boot timeout in seconds
+  timeout: 300
+  
+  # RAM allocation in MB
+  memory: 256
+  
+  # Enable networking in emulation
+  enable_network: true
+  
+  # Network mode: user (NAT) or tap (bridged)
+  network_mode: user
+  
+  # Directory containing pre-built kernels
+  kernel_dir: ./kernels
+  
+  # Enable QEMU snapshot mode (faster reset)
+  snapshot: true
+  
+  # GDB debugging port
+  debug_port: 1234
+  
+  # Port forwarding (host ports)
+  http_forward_port: 8080
+  ssh_forward_port: 2222
+  telnet_forward_port: 2323
+
+# =============================================================================
+# Scanner Settings
+# =============================================================================
+
+scanner:
+  # Scanners to run (comment out to disable)
+  enabled_scanners:
+    - web           # Web interface vulnerabilities
+    - network       # Network service security
+    - binary        # Binary analysis
+    - cve           # CVE correlation
+    - credentials   # Credential discovery
+    - crypto        # Cryptographic issues
+  
+  # Number of parallel scanner threads
+  parallel_scans: 4
+  
+  # Timeout per individual scan in seconds
+  timeout_per_scan: 600
+  
+  # Maximum crawl depth for web scanner
+  max_depth: 5
+  
+  # Follow redirects in web scanning
+  follow_redirects: true
+  
+  # User agent string for HTTP requests
+  user_agent: "EmberScan/1.0 Security Scanner"
+
+# =============================================================================
+# Firmware Extraction Settings
+# =============================================================================
+
+extractor:
+  # Auto-detect firmware format
+  auto_detect: true
+  
+  # Maximum recursive extraction depth
+  max_extraction_depth: 5
+  
+  # Supported filesystem types
+  supported_formats:
+    - squashfs
+    - cramfs
+    - jffs2
+    - ubifs
+    - romfs
+    - ext2
+    - ext4
+  
+  # Temporary directory for extraction
+  temp_dir: /tmp/emberscan
+
+# =============================================================================
+# Report Settings
+# =============================================================================
+
+reporter:
+  # Output formats to generate
+  output_formats:
+    - html
+    - json
+    # - sarif    # Uncomment for SARIF format (CI/CD integration)
+    # - pdf      # Uncomment for PDF reports
+  
+  # Output directory for reports
+  output_dir: ./reports
+  
+  # Include evidence (code snippets, requests) in reports
+  include_evidence: true
+  
+  # Minimum severity to include in reports
+  # Options: critical, high, medium, low, info
+  severity_threshold: low
+
+# =============================================================================
+# CVE Database Settings
+# =============================================================================
+
+# Path to local CVE database
+cve_database: ./data/cve_database.json
+
+# NVD API key for database updates (optional)
+# Get your key at: https://nvd.nist.gov/developers/request-an-api-key
+nvd_api_key: null
+
+# =============================================================================
+# Plugin Settings
+# =============================================================================
+
+# Directory containing plugins
+plugins_dir: ./plugins
+
+# List of plugins to enable (empty = all discovered)
+enabled_plugins: []
+
+# =============================================================================
+# Advanced Settings
+# =============================================================================
+
+# SPI flash programmer settings
+spi:
+  default_programmer: ch341a_spi
+  read_verify: true
+  
+# Network scan settings
+network_scan:
+  # Ports to scan by default
+  default_ports:
+    - 21    # FTP
+    - 22    # SSH
+    - 23    # Telnet
+    - 53    # DNS
+    - 80    # HTTP
+    - 161   # SNMP
+    - 443   # HTTPS
+    - 554   # RTSP
+    - 8080  # HTTP Proxy
+    - 8443  # HTTPS Alt
+
+# Web scan settings  
+web_scan:
+  # Test for default credentials
+  test_default_creds: true
+  
+  # Test for command injection
+  test_cmd_injection: true
+  
+  # Maximum forms to test
+  max_forms: 50
+  
+  # Request rate limit (requests per second)
+  rate_limit: 10
