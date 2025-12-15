@@ -11,12 +11,12 @@ from .crypto_scanner import CryptoScanner
 from .cve_scanner import CVEScanner
 
 __all__ = [
-    'BaseScanner',
-    'ScannerRegistry',
-    'WebScanner',
-    'NetworkScanner',
-    'BinaryScanner',
-    'CredentialScanner',
-    'CryptoScanner',
-    'CVEScanner',
+    "BaseScanner",
+    "ScannerRegistry",
+    "WebScanner",
+    "NetworkScanner",
+    "BinaryScanner",
+    "CredentialScanner",
+    "CryptoScanner",
+    "CVEScanner",
 ]

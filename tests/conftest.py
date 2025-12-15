@@ -54,29 +54,29 @@ def sample_squashfs(temp_dir):
     """Create a minimal SquashFS image for testing."""
     rootfs_dir = temp_dir / "rootfs"
     rootfs_dir.mkdir()
-    
+
     # Create minimal filesystem structure
     (rootfs_dir / "bin").mkdir()
     (rootfs_dir / "etc").mkdir()
     (rootfs_dir / "lib").mkdir()
-    
+
     # Create test files
     (rootfs_dir / "etc" / "passwd").write_text(
-        "root:x:0:0:root:/root:/bin/sh\n"
-        "nobody:x:99:99:Nobody:/:/sbin/nologin\n"
+        "root:x:0:0:root:/root:/bin/sh\n" "nobody:x:99:99:Nobody:/:/sbin/nologin\n"
     )
-    
+
     (rootfs_dir / "etc" / "shadow").write_text(
         "root::0:0:99999:7:::\n"  # Empty password for testing
     )
-    
+
     # Create a mock binary (just a text file for testing)
     (rootfs_dir / "bin" / "busybox").write_bytes(
-        b'\x7fELF\x01\x01\x01\x00' + b'\x00' * 8 +  # ELF header start
-        b'\x02\x00\x08\x00' +  # Type: EXEC, Machine: MIPS
-        b'\x00' * 36  # Rest of header
+        b"\x7fELF\x01\x01\x01\x00"
+        + b"\x00" * 8  # ELF header start
+        + b"\x02\x00\x08\x00"  # Type: EXEC, Machine: MIPS
+        + b"\x00" * 36  # Rest of header
     )
-    
+
     return rootfs_dir
 
 
@@ -84,16 +84,16 @@ def sample_squashfs(temp_dir):
 def sample_firmware_binary(temp_dir):
     """Create a sample firmware binary with known signatures."""
     firmware_file = temp_dir / "firmware.bin"
-    
+
     # Create firmware with TP-Link header and SquashFS signature
     content = bytearray(1024 * 10)  # 10KB file
-    
+
     # TP-Link header at start
-    content[0:2] = b'\x55\xAA'
-    
+    content[0:2] = b"\x55\xaa"
+
     # SquashFS signature at offset 0x1000
-    content[0x1000:0x1004] = b'hsqs'
-    
+    content[0x1000:0x1004] = b"hsqs"
+
     firmware_file.write_bytes(bytes(content))
     return firmware_file
 
@@ -103,20 +103,24 @@ def mock_vulnerable_webapp(temp_dir):
     """Create mock web application files with vulnerabilities."""
     www_dir = temp_dir / "www"
     www_dir.mkdir()
-    
+
     # PHP file with command injection
-    (www_dir / "admin.php").write_text('''<?php
+    (www_dir / "admin.php").write_text(
+        """<?php
     $cmd = $_GET['cmd'];
     system($cmd);  // Command injection!
     $password = "admin123";  // Hardcoded password
-    ?>''')
-    
+    ?>"""
+    )
+
     # Config file with credentials
-    (www_dir / "config.php").write_text('''<?php
+    (www_dir / "config.php").write_text(
+        """<?php
     $db_password = "secret123";
     $api_key = "AKIA1234567890ABCDEF";
-    ?>''')
-    
+    ?>"""
+    )
+
     return www_dir
 
 
@@ -126,12 +130,6 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests"
-    )
-    config.addinivalue_line(
-        "markers", "requires_qemu: marks tests requiring QEMU"
-    )
-    config.addinivalue_line(
-        "markers", "requires_network: marks tests requiring network access"
-    )
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
+    config.addinivalue_line("markers", "requires_qemu: marks tests requiring QEMU")
+    config.addinivalue_line("markers", "requires_network: marks tests requiring network access")

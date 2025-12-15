@@ -25,7 +25,7 @@ from emberscan.core.logger import get_logger
 
 __all__ = [
     "Config",
-    "EmberScanner", 
+    "EmberScanner",
     "get_logger",
     "__version__",
 ]
