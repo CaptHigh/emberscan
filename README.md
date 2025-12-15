@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/emberscan/emberscan/ci.yml?branch=main)](https://github.com/emberscan/emberscan/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/emberscan/emberscan/ci.yml?branch=main)](https://github.com/CaptHigh/emberscan/actions)
 [![codecov](https://codecov.io/gh/emberscan/emberscan/branch/main/graph/badge.svg)](https://codecov.io/gh/emberscan/emberscan)
 
 **EmberScan** is an automated embedded hardware firmware security scanner that extracts, emulates, and analyzes firmware from routers, switches, IP cameras, SBCs, and other IoT/embedded devices.
