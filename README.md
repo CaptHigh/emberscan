@@ -1,5 +1,5 @@
 # EmberScan 🔥
-
+## **THIS PROJECT IS WORK IN PROGRESS**
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/emberscan/emberscan/ci.yml?branch=main)](https://github.com/CaptHigh/emberscan/actions)
@@ -406,8 +406,8 @@ EmberScan is designed for **authorized security testing only**. Users are respon
 ## 📞 Support
 
 - **Documentation**: [emberscan.readthedocs.io](https://emberscan.readthedocs.io)
-- **Issues**: [GitHub Issues](https://github.com/emberscan/emberscan/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/emberscan/emberscan/discussions)
+- **Issues**: [GitHub Issues](https://github.com/CaptHigh/emberscan/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/CaptHigh/emberscan/discussions)
 
 ---
 
