@@ -56,14 +56,20 @@ class TestBinaryScanner:
     
     def test_check_suid_binaries(self, config, sample_squashfs):
         """Test SUID binary detection."""
+        import sys
+
+        # Skip on Windows - SUID bits are not supported
+        if sys.platform == 'win32':
+            pytest.skip("SUID bits not supported on Windows")
+
         scanner = BinaryScanner(config)
-        
+
         # Set SUID bit on busybox
         busybox = sample_squashfs / "bin" / "busybox"
         busybox.chmod(0o4755)
-        
+
         vulns = scanner._check_suid_binaries(sample_squashfs)
-        
+
         # Should detect SUID binary
         assert len(vulns) >= 1
         assert any('SUID' in v.title for v in vulns)
@@ -83,8 +89,9 @@ class TestCredentialScanner:
     def test_analyze_passwd_empty_password(self, config, sample_squashfs, sample_firmware_info):
         """Test detection of empty passwords."""
         scanner = CredentialScanner(config)
-        vulns = scanner._analyze_auth_files(sample_squashfs)
-        
+        # Use the correct method name from the implementation
+        vulns = scanner._analyze_passwd_shadow(sample_squashfs)
+
         # Should detect empty root password
         assert len(vulns) >= 1
         assert any('Empty Password' in v.title for v in vulns)
@@ -107,17 +114,17 @@ MIIEpQIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy...
     def test_is_false_positive(self, config):
         """Test false positive detection."""
         scanner = CredentialScanner(config)
-        
-        # Should be false positives
-        assert scanner._is_false_positive("") == True
-        assert scanner._is_false_positive("ab") == True
-        assert scanner._is_false_positive("your_password") == True
-        assert scanner._is_false_positive("${PASSWORD}") == True
-        assert scanner._is_false_positive("placeholder") == True
-        
+
+        # Should be false positives - method requires (credential, cred_type) arguments
+        assert scanner._is_false_positive("", "password") == True
+        assert scanner._is_false_positive("ab", "password") == True
+        assert scanner._is_false_positive("your_password", "password") == True
+        assert scanner._is_false_positive("${PASSWORD}", "password") == True
+        assert scanner._is_false_positive("placeholder", "password") == True
+
         # Should not be false positives
-        assert scanner._is_false_positive("actualP@ssw0rd!") == False
-        assert scanner._is_false_positive("admin123") == False
+        assert scanner._is_false_positive("actualP@ssw0rd!", "password") == False
+        assert scanner._is_false_positive("admin123", "password") == False
     
     def test_search_credentials(self, config, mock_vulnerable_webapp, sample_firmware_info):
         """Test credential pattern matching."""
@@ -125,14 +132,15 @@ MIIEpQIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy...
         rootfs = mock_vulnerable_webapp.parent
         www_dir = rootfs / "www"
         www_dir.mkdir(exist_ok=True)
-        
+
         # Move files
         for f in mock_vulnerable_webapp.iterdir():
             f.rename(www_dir / f.name)
-        
+
         scanner = CredentialScanner(config)
-        vulns = scanner._search_credentials(rootfs)
-        
+        # Use _scan_web_files instead of non-existent _search_credentials
+        vulns = scanner._scan_web_files(rootfs)
+
         # Should find hardcoded credentials
         assert len(vulns) >= 1
     
@@ -161,36 +169,40 @@ class TestWebScanner:
 
 class TestCVEScanner:
     """Test CVE correlation scanner."""
-    
+
     def test_known_vulnerable_software(self, config):
         """Test known vulnerable software database."""
-        from emberscan.scanners.cve_scanner import KNOWN_VULNERABLE_SOFTWARE
-        
-        assert 'busybox' in KNOWN_VULNERABLE_SOFTWARE
-        assert 'dropbear' in KNOWN_VULNERABLE_SOFTWARE
-        assert 'openssl' in KNOWN_VULNERABLE_SOFTWARE
-    
-    def test_find_cves_for_component(self, config):
+        from emberscan.scanners.cve_scanner import EMBEDDED_CVE_DATABASE
+
+        assert 'busybox' in EMBEDDED_CVE_DATABASE
+        assert 'dropbear' in EMBEDDED_CVE_DATABASE
+        assert 'openssl' in EMBEDDED_CVE_DATABASE
+
+    def test_match_cves_for_component(self, config):
         """Test CVE matching for components."""
-        from emberscan.scanners.cve_scanner import CVEScanner
-        
+        from emberscan.scanners.cve_scanner import CVEScanner, SoftwareComponent
+
         scanner = CVEScanner(config)
-        
-        # Test busybox CVE matching
-        component = {'name': 'busybox', 'version': '1.27.0'}
-        cves = scanner._find_cves_for_component(component)
-        
-        assert len(cves) >= 1
-        assert any('CVE' in c['cve_id'] for c in cves)
-    
-    def test_cvss_to_severity(self, config):
-        """Test CVSS score to severity conversion."""
+        scanner._load_cve_database()
+
+        # Test busybox CVE matching with a vulnerable version
+        component = SoftwareComponent(
+            name='busybox',
+            version='1.27.0',
+            file_path='bin/busybox'
+        )
+        vulns = scanner._match_cves([component])
+
+        assert len(vulns) >= 1
+        assert any('CVE' in v.title for v in vulns)
+
+    def test_version_affected(self, config):
+        """Test version comparison for CVE matching."""
         from emberscan.scanners.cve_scanner import CVEScanner
-        
+
         scanner = CVEScanner(config)
-        
-        assert scanner._cvss_to_severity(9.5) == Severity.CRITICAL
-        assert scanner._cvss_to_severity(7.5) == Severity.HIGH
-        assert scanner._cvss_to_severity(5.0) == Severity.MEDIUM
-        assert scanner._cvss_to_severity(2.0) == Severity.LOW
-        assert scanner._cvss_to_severity(0.0) == Severity.INFO
+
+        # Test version is affected (below threshold)
+        assert scanner._version_affected('1.27.0', ['<1.35']) == True
+        assert scanner._version_affected('1.27.0', ['<1.20']) == False
+        assert scanner._version_affected('1.33.0', ['<1.34']) == True

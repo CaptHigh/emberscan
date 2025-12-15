@@ -28,9 +28,14 @@ class TestConfig:
     
     def test_config_validation(self, temp_dir):
         """Test configuration validation."""
-        config = Config(workspace_dir=str(temp_dir))
+        # Use a non-existent kernel directory to trigger validation error
+        config = Config(
+            workspace_dir=str(temp_dir),
+        )
+        # Explicitly set kernel_dir to a non-existent path
+        config.qemu.kernel_dir = str(temp_dir / "nonexistent_kernels")
         errors = config.validate()
-        
+
         # Should have kernel directory error
         assert any("kernel" in e.lower() for e in errors)
     
