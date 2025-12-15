@@ -22,7 +22,7 @@ from ..core.models import ScanSession, Vulnerability, Severity
 logger = get_logger(__name__)
 
 
-HTML_TEMPLATE = '''<!DOCTYPE html>
+HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -347,10 +347,10 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         <p>This report is confidential. Handle according to your organization's security policies.</p>
     </footer>
 </body>
-</html>'''
+</html>"""
 
 
-VULN_TEMPLATE = '''
+VULN_TEMPLATE = """
 <div class="vulnerability ${severity_class}">
     <div class="header">
         <span class="title">${title}</span>
@@ -375,195 +375,206 @@ VULN_TEMPLATE = '''
         <div class="scanner-badge">Scanner: ${scanner}</div>
     </div>
 </div>
-'''
+"""
 
 
 class HTMLReporter:
     """Generate HTML security reports."""
-    
+
     def __init__(self, config: Config):
         self.config = config
-    
+
     def generate(self, session: ScanSession, output_dir: str) -> str:
         """Generate HTML report for scan session."""
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
-        
+
         report_file = output_path / f"emberscan_report_{session.id[:8]}.html"
-        
+
         # Prepare template variables
         variables = self._prepare_variables(session)
-        
+
         # Generate HTML
         template = Template(HTML_TEMPLATE)
         html_content = template.safe_substitute(variables)
-        
+
         # Write file
         report_file.write_text(html_content)
-        
+
         logger.info(f"HTML report generated: {report_file}")
         return str(report_file)
-    
+
     def _prepare_variables(self, session: ScanSession) -> Dict:
         """Prepare template variables from session data."""
         summary = session.get_summary()
-        
+
         # Calculate duration
         if session.started_at and session.completed_at:
             duration = session.completed_at - session.started_at
             duration_str = f"{duration.total_seconds():.1f}s"
         else:
             duration_str = "N/A"
-        
+
         # Group vulnerabilities by severity
         all_vulns = session.all_vulnerabilities
-        
+
         critical_high = [v for v in all_vulns if v.severity in [Severity.CRITICAL, Severity.HIGH]]
         medium = [v for v in all_vulns if v.severity == Severity.MEDIUM]
         low_info = [v for v in all_vulns if v.severity in [Severity.LOW, Severity.INFO]]
-        
+
         # Generate firmware info HTML
         firmware_html = self._generate_firmware_info(session.firmware)
-        
+
         # Generate vulnerability HTML
-        critical_high_html = self._generate_vuln_list(critical_high) or '<p>No critical or high severity findings.</p>'
-        medium_html = self._generate_vuln_list(medium) or '<p>No medium severity findings.</p>'
-        low_info_html = self._generate_vuln_list(low_info) or '<p>No low or informational findings.</p>'
-        
+        critical_high_html = (
+            self._generate_vuln_list(critical_high)
+            or "<p>No critical or high severity findings.</p>"
+        )
+        medium_html = self._generate_vuln_list(medium) or "<p>No medium severity findings.</p>"
+        low_info_html = (
+            self._generate_vuln_list(low_info) or "<p>No low or informational findings.</p>"
+        )
+
         # Generate scanner summary
         scanner_html = self._generate_scanner_summary(session.scan_results)
-        
+
         return {
-            'session_name': session.name,
-            'scan_date': session.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-            'duration': duration_str,
-            'total_vulns': len(all_vulns),
-            'critical_count': summary['by_severity']['critical'],
-            'high_count': summary['by_severity']['high'],
-            'medium_count': summary['by_severity']['medium'],
-            'low_count': summary['by_severity']['low'],
-            'info_count': summary['by_severity']['info'],
-            'firmware_info': firmware_html,
-            'critical_high_vulns': critical_high_html,
-            'medium_vulns': medium_html,
-            'low_info_vulns': low_info_html,
-            'scanner_summary': scanner_html,
-            'generation_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "session_name": session.name,
+            "scan_date": session.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration": duration_str,
+            "total_vulns": len(all_vulns),
+            "critical_count": summary["by_severity"]["critical"],
+            "high_count": summary["by_severity"]["high"],
+            "medium_count": summary["by_severity"]["medium"],
+            "low_count": summary["by_severity"]["low"],
+            "info_count": summary["by_severity"]["info"],
+            "firmware_info": firmware_html,
+            "critical_high_vulns": critical_high_html,
+            "medium_vulns": medium_html,
+            "low_info_vulns": low_info_html,
+            "scanner_summary": scanner_html,
+            "generation_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-    
+
     def _generate_firmware_info(self, firmware) -> str:
         """Generate firmware information HTML."""
         if not firmware:
-            return '<p>No firmware information available.</p>'
-        
+            return "<p>No firmware information available.</p>"
+
         items = [
-            ('Name', firmware.name or 'Unknown'),
-            ('Vendor', firmware.vendor or 'Unknown'),
-            ('Version', firmware.version or 'Unknown'),
-            ('Architecture', firmware.architecture.value if firmware.architecture else 'Unknown'),
-            ('Device Type', firmware.device_type or 'Unknown'),
-            ('MD5', firmware.md5 or 'N/A'),
-            ('SHA256', firmware.sha256[:32] + '...' if firmware.sha256 else 'N/A'),
-            ('File Size', f"{firmware.file_size:,} bytes" if firmware.file_size else 'N/A'),
+            ("Name", firmware.name or "Unknown"),
+            ("Vendor", firmware.vendor or "Unknown"),
+            ("Version", firmware.version or "Unknown"),
+            ("Architecture", firmware.architecture.value if firmware.architecture else "Unknown"),
+            ("Device Type", firmware.device_type or "Unknown"),
+            ("MD5", firmware.md5 or "N/A"),
+            ("SHA256", firmware.sha256[:32] + "..." if firmware.sha256 else "N/A"),
+            ("File Size", f"{firmware.file_size:,} bytes" if firmware.file_size else "N/A"),
         ]
-        
-        html = ''
+
+        html = ""
         for label, value in items:
-            html += f'''
+            html += f"""
             <div class="item">
                 <span class="label">{label}</span>
                 <span class="value">{value}</span>
             </div>
-            '''
-        
+            """
+
         return html
-    
+
     def _generate_vuln_list(self, vulnerabilities: List[Vulnerability]) -> str:
         """Generate vulnerability list HTML."""
         if not vulnerabilities:
-            return ''
-        
-        html = ''
+            return ""
+
+        html = ""
         template = Template(VULN_TEMPLATE)
-        
+
         for vuln in sorted(vulnerabilities, key=lambda v: v.severity, reverse=True):
             # Prepare optional fields
-            file_path = ''
+            file_path = ""
             if vuln.file_path:
-                file_path = f'''
+                file_path = f"""
                 <div class="detail-row">
                     <span class="detail-label">File Path</span>
                     <span>{vuln.file_path}{f":{vuln.line_number}" if vuln.line_number else ""}</span>
                 </div>
-                '''
-            
-            endpoint = ''
+                """
+
+            endpoint = ""
             if vuln.endpoint:
-                endpoint = f'''
+                endpoint = f"""
                 <div class="detail-row">
                     <span class="detail-label">Endpoint</span>
                     <span>{vuln.endpoint}</span>
                 </div>
-                '''
-            
-            cve_ids = ''
+                """
+
+            cve_ids = ""
             if vuln.cve_ids:
-                cve_tags = ''.join([
-                    f'<span class="cve-tag"><a href="https://nvd.nist.gov/vuln/detail/{cve}" target="_blank">{cve}</a></span>'
-                    for cve in vuln.cve_ids
-                ])
-                cve_ids = f'''
+                cve_tags = "".join(
+                    [
+                        f'<span class="cve-tag"><a href="https://nvd.nist.gov/vuln/detail/{cve}" target="_blank">{cve}</a></span>'
+                        for cve in vuln.cve_ids
+                    ]
+                )
+                cve_ids = f"""
                 <div class="detail-row">
                     <span class="detail-label">CVE IDs</span>
                     <div class="cve-list">{cve_tags}</div>
                 </div>
-                '''
-            
-            html += template.safe_substitute({
-                'severity_class': vuln.severity.value.lower(),
-                'title': self._escape_html(vuln.title),
-                'severity': vuln.severity.value.upper(),
-                'description': self._escape_html(vuln.description),
-                'file_path': file_path,
-                'endpoint': endpoint,
-                'cve_ids': cve_ids,
-                'evidence': self._escape_html(vuln.evidence or 'N/A'),
-                'remediation': self._escape_html(vuln.remediation or 'Review and remediate according to security best practices.'),
-                'scanner': vuln.scanner_name,
-            })
-        
+                """
+
+            html += template.safe_substitute(
+                {
+                    "severity_class": vuln.severity.value.lower(),
+                    "title": self._escape_html(vuln.title),
+                    "severity": vuln.severity.value.upper(),
+                    "description": self._escape_html(vuln.description),
+                    "file_path": file_path,
+                    "endpoint": endpoint,
+                    "cve_ids": cve_ids,
+                    "evidence": self._escape_html(vuln.evidence or "N/A"),
+                    "remediation": self._escape_html(
+                        vuln.remediation
+                        or "Review and remediate according to security best practices."
+                    ),
+                    "scanner": vuln.scanner_name,
+                }
+            )
+
         return html
-    
+
     def _generate_scanner_summary(self, scan_results) -> str:
         """Generate scanner summary HTML."""
         if not scan_results:
-            return '<p>No scanner results available.</p>'
-        
+            return "<p>No scanner results available.</p>"
+
         html = '<div class="firmware-info">'
-        
+
         for result in scan_results:
             vuln_count = len(result.vulnerabilities)
-            status_icon = '✅' if result.status.name == 'COMPLETED' else '❌'
-            
-            html += f'''
+            status_icon = "✅" if result.status.name == "COMPLETED" else "❌"
+
+            html += f"""
             <div class="item">
                 <span class="label">{result.scanner_name}</span>
                 <span class="value">{status_icon} {vuln_count} findings ({result.duration:.1f}s)</span>
             </div>
-            '''
-        
-        html += '</div>'
+            """
+
+        html += "</div>"
         return html
-    
+
     def _escape_html(self, text: str) -> str:
         """Escape HTML special characters."""
         if not text:
-            return ''
+            return ""
         return (
-            text
-            .replace('&', '&amp;')
-            .replace('<', '&lt;')
-            .replace('>', '&gt;')
-            .replace('"', '&quot;')
-            .replace("'", '&#39;')
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
         )

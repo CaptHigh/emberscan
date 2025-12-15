@@ -7,5 +7,5 @@ Main entry point for command-line usage.
 
 from emberscan.cli import main
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
