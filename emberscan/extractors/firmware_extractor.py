@@ -121,7 +121,7 @@ class FirmwareExtractor:
                     result["endianness"] = (
                         Endianness.LITTLE if "_le" in sig_type else Endianness.BIG
                     )
-                elif sig_type == "ubifs":
+                elif sig_type in ("ubifs", "ubi"):
                     result["filesystem_type"] = FilesystemType.UBIFS
                 elif sig_type == "romfs":
                     result["filesystem_type"] = FilesystemType.ROMFS
@@ -169,22 +169,41 @@ class FirmwareExtractor:
         # Manual extraction fallback
         analysis = self.analyze(firmware_path)
 
+        # Supported filesystem types for extraction
+        supported_fs_types = [
+            "squashfs_le",
+            "squashfs_be",
+            "cramfs_le",
+            "cramfs_be",
+            "jffs2_le",
+            "jffs2_be",
+            "ubifs",
+            "ubi",
+            "romfs",
+        ]
+
         # Find filesystem component
         fs_component = None
         for comp in analysis["components"]:
-            if comp["type"] in [
-                "squashfs_le",
-                "squashfs_be",
-                "cramfs_le",
-                "cramfs_be",
-                "jffs2_le",
-                "jffs2_be",
-            ]:
+            if comp["type"] in supported_fs_types:
                 fs_component = comp
                 break
 
         if not fs_component:
-            raise FilesystemExtractionError("No supported filesystem found in firmware")
+            # Provide more detailed error message about what was found
+            found_types = [comp["type"] for comp in analysis["components"]]
+            if found_types:
+                logger.warning(f"Components found but not extractable: {found_types}")
+                raise FilesystemExtractionError(
+                    f"No supported filesystem found. Detected components: {', '.join(found_types)}. "
+                    "Supported types: squashfs, cramfs, jffs2, ubifs, romfs"
+                )
+            else:
+                raise FilesystemExtractionError(
+                    "No supported filesystem found in firmware. "
+                    "The firmware may be encrypted, compressed with an unknown format, "
+                    "or use a proprietary filesystem."
+                )
 
         # Extract filesystem
         rootfs = self._manual_extract(
@@ -289,19 +308,59 @@ class FirmwareExtractor:
                 timeout=300,
             )
 
-            # Find extracted rootfs
-            for item in output_dir.rglob("squashfs-root"):
-                if item.is_dir():
-                    logger.info(f"Found rootfs: {item}")
-                    return item
+            # Common rootfs directory patterns created by binwalk
+            rootfs_patterns = [
+                "squashfs-root",
+                "cpio-root",
+                "jffs2-root",
+                "cramfs-root",
+                "ubifs-root",
+                "romfs-root",
+                "rootfs",
+            ]
 
-            # Check for other extraction directories
+            # Find extracted rootfs by common patterns
+            for pattern in rootfs_patterns:
+                for item in output_dir.rglob(pattern):
+                    if item.is_dir():
+                        logger.info(f"Found rootfs: {item}")
+                        return item
+
+            # Check for extraction directories (e.g., _firmware.bin.extracted)
             for item in output_dir.iterdir():
                 if item.is_dir() and item.name.startswith("_"):
+                    # First try to find rootfs patterns inside
+                    for pattern in rootfs_patterns:
+                        for subitem in item.rglob(pattern):
+                            if subitem.is_dir():
+                                logger.info(f"Found rootfs: {subitem}")
+                                return subitem
+
+                    # Look for directories with typical filesystem structure
                     for subitem in item.rglob("*"):
-                        if subitem.is_dir() and (subitem / "bin").exists():
-                            logger.info(f"Found rootfs: {subitem}")
-                            return subitem
+                        if subitem.is_dir():
+                            # Check for common rootfs indicators
+                            has_bin = (subitem / "bin").exists()
+                            has_etc = (subitem / "etc").exists()
+                            has_lib = (subitem / "lib").exists()
+                            has_usr = (subitem / "usr").exists()
+                            has_sbin = (subitem / "sbin").exists()
+
+                            # If at least 2 of these exist, likely a rootfs
+                            indicators = sum([has_bin, has_etc, has_lib, has_usr, has_sbin])
+                            if indicators >= 2:
+                                logger.info(f"Found rootfs: {subitem}")
+                                return subitem
+
+                    # Last resort: return the extraction directory itself if it has content
+                    subdirs = list(item.iterdir())
+                    if subdirs:
+                        # Check if the extraction directory itself looks like rootfs
+                        has_bin = (item / "bin").exists()
+                        has_etc = (item / "etc").exists()
+                        if has_bin or has_etc:
+                            logger.info(f"Found rootfs: {item}")
+                            return item
 
             return None
 
@@ -352,6 +411,40 @@ class FirmwareExtractor:
         elif fs_type == FilesystemType.JFFS2:
             # JFFS2 extraction requires special handling
             subprocess.run(["jefferson", str(temp_fs), "-d", str(rootfs_dir)], capture_output=True)
+
+        elif fs_type == FilesystemType.UBIFS:
+            # UBIFS extraction using ubireader
+            try:
+                subprocess.run(
+                    ["ubireader_extract_files", "-o", str(rootfs_dir), str(temp_fs)],
+                    capture_output=True,
+                    check=True,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                # Try ubi_reader as alternative
+                try:
+                    subprocess.run(
+                        ["ubi_reader", "-e", str(rootfs_dir), str(temp_fs)],
+                        capture_output=True,
+                    )
+                except FileNotFoundError:
+                    logger.warning("ubireader tools not found, trying binwalk fallback")
+                    subprocess.run(
+                        ["binwalk", "-e", "-C", str(rootfs_dir), str(temp_fs)],
+                        capture_output=True,
+                    )
+
+        elif fs_type == FilesystemType.ROMFS:
+            # RomFS extraction using genromfs or binwalk
+            try:
+                # Use binwalk for romfs extraction
+                subprocess.run(
+                    ["binwalk", "-e", "-C", str(rootfs_dir), str(temp_fs)],
+                    capture_output=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError:
+                logger.warning("RomFS extraction with binwalk failed")
 
         else:
             raise FilesystemExtractionError(f"Unsupported filesystem type: {fs_type}")
