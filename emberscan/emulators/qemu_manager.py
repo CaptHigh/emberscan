@@ -505,14 +505,32 @@ class QEMUManager:
 
         return kernels
 
-    def download_kernels(self, architectures: List[str] = None):
-        """Download pre-built kernels from firmadyne project."""
+    def download_kernels(self, architectures: List[str] = None) -> Dict[str, bool]:
+        """
+        Download pre-built kernels from firmadyne project releases.
+
+        Args:
+            architectures: List of architectures to download (mipsel, mips, arm)
+
+        Returns:
+            Dictionary mapping architecture to download success status
+        """
         import urllib.request
 
+        # Use the correct release URLs from firmadyne project
         kernel_urls = {
-            "mipsel": "https://github.com/firmadyne/kernel-v4.1/raw/master/images/vmlinux.mipsel",
-            "mips": "https://github.com/firmadyne/kernel-v4.1/raw/master/images/vmlinux.mipseb",
-            "arm": "https://github.com/firmadyne/kernel-v4.1/raw/master/images/zImage.armel",
+            "mipsel": (
+                "https://github.com/firmadyne/kernel-v2.6/releases/download/v1.1/vmlinux.mipsel",
+                "vmlinux.mipsel"
+            ),
+            "mips": (
+                "https://github.com/firmadyne/kernel-v2.6/releases/download/v1.1/vmlinux.mipseb",
+                "vmlinux.mipseb"
+            ),
+            "arm": (
+                "https://github.com/firmadyne/kernel-v4.1/releases/download/v1.1/zImage.armel",
+                "zImage.armel"
+            ),
         }
 
         if not architectures:
@@ -520,15 +538,19 @@ class QEMUManager:
 
         self.kernel_dir.mkdir(parents=True, exist_ok=True)
 
+        results = {}
         for arch in architectures:
             if arch not in kernel_urls:
+                logger.warning(f"Unknown architecture: {arch}")
+                results[arch] = False
                 continue
 
-            url = kernel_urls[arch]
-            target = self.kernel_dir / f"vmlinux.{arch}"
+            url, filename = kernel_urls[arch]
+            target = self.kernel_dir / filename
 
             if target.exists():
                 logger.info(f"Kernel already exists: {target}")
+                results[arch] = True
                 continue
 
             logger.info(f"Downloading kernel for {arch}...")
@@ -539,8 +561,21 @@ class QEMUManager:
                 parsed = urlparse(url)
                 if parsed.scheme not in ("http", "https"):
                     logger.error(f"Invalid URL scheme: {parsed.scheme}")
+                    results[arch] = False
                     continue
                 urllib.request.urlretrieve(url, target)  # nosec B310
-                logger.info(f"Downloaded: {target}")
+
+                # Verify file was downloaded and has content
+                if target.exists() and target.stat().st_size > 0:
+                    logger.info(f"Downloaded: {target} ({target.stat().st_size} bytes)")
+                    results[arch] = True
+                else:
+                    logger.error(f"Download resulted in empty file for {arch}")
+                    results[arch] = False
+                    if target.exists():
+                        target.unlink()
             except Exception as e:
                 logger.error(f"Failed to download {arch} kernel: {e}")
+                results[arch] = False
+
+        return results

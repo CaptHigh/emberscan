@@ -203,6 +203,32 @@ def cmd_scan(args, config: Config):
         print(f"{Colors.FAIL}Error: Firmware file not found: {args.firmware}{Colors.END}")
         sys.exit(1)
 
+    if firmware_path.is_dir():
+        print(f"{Colors.FAIL}Error: '{args.firmware}' is a directory, not a file{Colors.END}")
+        print(f"  Use 'emberscan emulate' command if you want to emulate an extracted rootfs")
+        sys.exit(1)
+
+    # Check file is readable and has content
+    try:
+        file_size = firmware_path.stat().st_size
+        if file_size == 0:
+            print(f"{Colors.FAIL}Error: Firmware file is empty: {args.firmware}{Colors.END}")
+            sys.exit(1)
+
+        # Quick sanity check - read first few bytes
+        with open(firmware_path, "rb") as f:
+            header = f.read(16)
+            if len(header) < 16:
+                print(f"{Colors.FAIL}Error: Firmware file too small ({file_size} bytes){Colors.END}")
+                sys.exit(1)
+
+    except PermissionError:
+        print(f"{Colors.FAIL}Error: Permission denied reading: {args.firmware}{Colors.END}")
+        sys.exit(1)
+    except IOError as e:
+        print(f"{Colors.FAIL}Error: Cannot read firmware file: {e}{Colors.END}")
+        sys.exit(1)
+
     # Parse scanners
     scanners = None
     if args.scanners:
@@ -254,8 +280,46 @@ def cmd_scan(args, config: Config):
         if summary["duration"]:
             print(f"\n  Duration: {summary['duration']:.1f} seconds")
 
+        # Display top vulnerabilities in terminal
+        all_vulns = session.all_vulnerabilities
+        if all_vulns:
+            # Sort by severity (critical first)
+            severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+            sorted_vulns = sorted(all_vulns, key=lambda v: severity_order.get(v.severity.value.lower(), 5))
+
+            # Show top vulnerabilities
+            print(f"\n{Colors.CYAN}Top Vulnerabilities:{Colors.END}")
+            shown_count = 0
+            max_to_show = 10
+
+            for vuln in sorted_vulns:
+                if shown_count >= max_to_show:
+                    remaining = len(sorted_vulns) - shown_count
+                    if remaining > 0:
+                        print(f"\n  ... and {remaining} more vulnerabilities (see report for details)")
+                    break
+
+                severity_color = {
+                    "critical": Colors.FAIL,
+                    "high": Colors.WARNING,
+                    "medium": Colors.WARNING,
+                    "low": Colors.BLUE,
+                    "info": Colors.END,
+                }.get(vuln.severity.value.lower(), Colors.END)
+
+                print(f"\n  [{severity_color}{vuln.severity.value.upper()}{Colors.END}] {vuln.title}")
+                if vuln.file_path:
+                    print(f"    File: {vuln.file_path}")
+                if vuln.description:
+                    # Truncate long descriptions
+                    desc = vuln.description[:100] + "..." if len(vuln.description) > 100 else vuln.description
+                    print(f"    {desc}")
+                shown_count += 1
+
+        # Show absolute path for clarity
+        report_path = Path(args.output).absolute() / session.id
         if not args.no_report:
-            print(f"\n{Colors.GREEN}Reports saved to: {args.output}/{session.id}/{Colors.END}")
+            print(f"\n{Colors.GREEN}Reports saved to: {report_path}{Colors.END}")
 
         # Exit code based on findings
         if summary["by_severity"]["critical"] > 0:
@@ -267,10 +331,41 @@ def cmd_scan(args, config: Config):
         print(f"\n{Colors.WARNING}Scan interrupted by user{Colors.END}")
         sys.exit(130)
     except Exception as e:
-        print(f"\n{Colors.FAIL}Scan failed: {e}{Colors.END}")
+        from emberscan.core.exceptions import (
+            FilesystemExtractionError,
+            EncryptedFirmwareError,
+            UnsupportedFirmwareError,
+            ExtractionError,
+            EmulationError,
+            ScannerError,
+        )
+
+        # Provide specific helpful messages for common errors
+        if isinstance(e, FilesystemExtractionError):
+            print(f"\n{Colors.FAIL}Extraction Failed: {e}{Colors.END}")
+            print(f"\n{Colors.WARNING}Troubleshooting tips:{Colors.END}")
+            print("  1. Ensure 'binwalk' is installed with all extraction tools")
+            print("  2. Try running: 'sudo apt install binwalk squashfs-tools jefferson'")
+            print("  3. Check if the firmware uses a proprietary filesystem")
+            print("  4. Use '--static-only' flag to skip extraction if analyzing raw data")
+        elif isinstance(e, EncryptedFirmwareError):
+            print(f"\n{Colors.FAIL}Encrypted Firmware: {e}{Colors.END}")
+            print(f"\n{Colors.WARNING}The firmware appears to be encrypted.{Colors.END}")
+            print("  Consider using vendor-specific decryption tools or keys.")
+        elif isinstance(e, UnsupportedFirmwareError):
+            print(f"\n{Colors.FAIL}Unsupported Firmware: {e}{Colors.END}")
+        elif isinstance(e, ExtractionError):
+            print(f"\n{Colors.FAIL}Extraction Error: {e}{Colors.END}")
+        elif isinstance(e, EmulationError):
+            print(f"\n{Colors.FAIL}Emulation Error: {e}{Colors.END}")
+            print(f"\n{Colors.WARNING}Use '--static-only' flag to skip emulation{Colors.END}")
+        elif isinstance(e, ScannerError):
+            print(f"\n{Colors.FAIL}Scanner Error: {e}{Colors.END}")
+        else:
+            print(f"\n{Colors.FAIL}Scan failed: {e}{Colors.END}")
+
         if args.debug:
             import traceback
-
             traceback.print_exc()
         sys.exit(1)
 
@@ -281,6 +376,19 @@ def cmd_extract(args, config: Config):
 
     if not firmware_path.exists():
         print(f"{Colors.FAIL}Error: File not found: {args.firmware}{Colors.END}")
+        sys.exit(1)
+
+    if firmware_path.is_dir():
+        print(f"{Colors.FAIL}Error: '{args.firmware}' is a directory, not a file{Colors.END}")
+        sys.exit(1)
+
+    # Check file is readable
+    try:
+        if firmware_path.stat().st_size == 0:
+            print(f"{Colors.FAIL}Error: Firmware file is empty{Colors.END}")
+            sys.exit(1)
+    except PermissionError:
+        print(f"{Colors.FAIL}Error: Permission denied reading: {args.firmware}{Colors.END}")
         sys.exit(1)
 
     extractor = FirmwareExtractor(config)
@@ -311,9 +419,28 @@ def cmd_extract(args, config: Config):
 
     try:
         rootfs = extractor.extract(str(firmware_path), args.output)
-        print(f"\n{Colors.GREEN}Extraction complete: {rootfs}{Colors.END}")
+        print(f"\n{Colors.GREEN}Extraction complete: {Path(rootfs).absolute()}{Colors.END}")
     except Exception as e:
-        print(f"\n{Colors.FAIL}Extraction failed: {e}{Colors.END}")
+        from emberscan.core.exceptions import (
+            FilesystemExtractionError,
+            EncryptedFirmwareError,
+            UnsupportedFirmwareError,
+        )
+
+        if isinstance(e, FilesystemExtractionError):
+            print(f"\n{Colors.FAIL}Extraction Failed: {e}{Colors.END}")
+            print(f"\n{Colors.WARNING}Troubleshooting tips:{Colors.END}")
+            print("  1. Ensure 'binwalk' is installed: apt install binwalk")
+            print("  2. Install filesystem tools: apt install squashfs-tools")
+            print("  3. For JFFS2: pip install jefferson")
+            print("  4. The firmware may use a proprietary or encrypted filesystem")
+        elif isinstance(e, EncryptedFirmwareError):
+            print(f"\n{Colors.FAIL}Encrypted Firmware Detected{Colors.END}")
+            print(f"  The firmware appears to be encrypted: {e}")
+        elif isinstance(e, UnsupportedFirmwareError):
+            print(f"\n{Colors.FAIL}Unsupported Firmware Format: {e}{Colors.END}")
+        else:
+            print(f"\n{Colors.FAIL}Extraction failed: {e}{Colors.END}")
         sys.exit(1)
 
 
@@ -449,8 +576,27 @@ def cmd_download_kernels(args, config: Config):
         archs = [args.arch]
 
     print(f"\n{Colors.CYAN}[*] Downloading emulation kernels...{Colors.END}")
-    manager.download_kernels(archs)
-    print(f"\n{Colors.GREEN}Kernels saved to: {args.output}{Colors.END}")
+    results = manager.download_kernels(archs)
+
+    # Summary of download results
+    successful = [arch for arch, success in results.items() if success]
+    failed = [arch for arch, success in results.items() if not success]
+
+    if successful:
+        print(f"\n{Colors.GREEN}Successfully downloaded kernels for: {', '.join(successful)}{Colors.END}")
+        print(f"{Colors.GREEN}Kernels saved to: {Path(args.output).absolute()}{Colors.END}")
+
+    if failed:
+        print(f"\n{Colors.FAIL}Failed to download kernels for: {', '.join(failed)}{Colors.END}")
+        print(f"{Colors.WARNING}Try downloading manually from:{Colors.END}")
+        print(f"  - MIPS: https://github.com/firmadyne/kernel-v2.6/releases")
+        print(f"  - ARM:  https://github.com/firmadyne/kernel-v4.1/releases")
+
+    if not successful and not failed:
+        print(f"\n{Colors.WARNING}No kernels to download (all already exist or no valid architectures specified){Colors.END}")
+
+    if failed:
+        sys.exit(1)
 
 
 def main():
