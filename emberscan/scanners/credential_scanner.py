@@ -360,10 +360,77 @@ class CredentialScanner(BaseScanner):
     def _scan_file_for_credentials(self, file_path: Path, rootfs: Path) -> List[Vulnerability]:
         """Scan a single file for credential patterns."""
         vulnerabilities = []
+        relative_path = str(file_path.relative_to(rootfs))
+
+        # Skip common system binaries that contain help text, not real credentials
+        # These are standard Unix utilities that will have "password" in help strings
+        skip_binaries = {
+            "passwd",
+            "login",
+            "su",
+            "sudo",
+            "chpasswd",
+            "newusers",
+            "ssh",
+            "sshd",
+            "dropbear",
+            "telnetd",
+            "ftpd",
+            "busybox",
+            "ash",
+            "bash",
+            "sh",
+            "csh",
+            "zsh",
+            "useradd",
+            "usermod",
+            "userdel",
+            "groupadd",
+            "cmp",
+            "diff",
+            "grep",
+            "awk",
+            "sed",
+            "cat",
+            "ls",
+            "free",
+            "top",
+            "ps",
+            "mount",
+            "umount",
+            "df",
+            "openssl",
+            "curl",
+            "wget",
+        }
+
+        # Check if this is a known system binary
+        if file_path.name in skip_binaries:
+            return vulnerabilities
+
+        # Also skip if the path indicates this is a standard system binary
+        binary_paths = {"usr/bin", "usr/sbin", "bin", "sbin"}
+        path_parts = relative_path.split("/")
+        if len(path_parts) >= 2:
+            parent_path = "/".join(path_parts[:-1])
+            if parent_path in binary_paths:
+                # Only scan scripts, not compiled binaries
+                try:
+                    # Check if it's a text file by looking at first bytes
+                    with open(file_path, "rb") as f:
+                        header = f.read(512)
+                        # Skip if it contains many null bytes (likely binary)
+                        null_count = header.count(b"\x00")
+                        if null_count > len(header) * 0.1:  # More than 10% null bytes
+                            return vulnerabilities
+                        # Check for ELF magic number
+                        if header.startswith(b"\x7fELF"):
+                            return vulnerabilities
+                except Exception:
+                    pass
 
         try:
             content = file_path.read_text(errors="ignore")
-            relative_path = str(file_path.relative_to(rootfs))
 
             for pattern, cred_type, severity in CREDENTIAL_PATTERNS:
                 matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
@@ -403,7 +470,9 @@ class CredentialScanner(BaseScanner):
 
     def _is_false_positive(self, credential: str, cred_type: str) -> bool:
         """Check if credential is likely a false positive."""
-        # Skip placeholders
+        cred_lower = credential.lower()
+
+        # Skip placeholders and documentation text
         placeholders = [
             "your_password",
             "enter_password",
@@ -420,8 +489,6 @@ class CredentialScanner(BaseScanner):
             "todo",
         ]
 
-        cred_lower = credential.lower()
-
         if any(p in cred_lower for p in placeholders):
             return True
 
@@ -436,6 +503,157 @@ class CredentialScanner(BaseScanner):
         # Skip common config patterns
         if credential.startswith("$") and cred_type == "password":
             return True  # Variable reference
+
+        # Skip help text / UI strings commonly found in binaries
+        # These are prompts, error messages, and UI labels, not actual credentials
+        help_text_patterns = [
+            # Password prompts and help text
+            "retype",
+            "re-type",
+            "reenter",
+            "re-enter",
+            "confirm",
+            "incorrect",
+            "invalid",
+            "wrong",
+            "error",
+            "failed",
+            "enter",
+            "input",
+            "type",
+            "provide",
+            "specify",
+            "new",
+            "old",
+            "current",
+            "previous",
+            "passwords",
+            "must",
+            "should",
+            "cannot",
+            "required",
+            "minimum",
+            "maximum",
+            "length",
+            "character",
+            "match",
+            "matches",
+            "matching",
+            "mismatch",
+            "expire",
+            "expired",
+            "expiration",
+            "expires",
+            "change",
+            "changed",
+            "changing",
+            "reset",
+            "authentication",
+            "authenticate",
+            "authenticating",
+            "login",
+            "logon",
+            "logout",
+            "logged",
+            "please",
+            "press",
+            "click",
+            "select",
+            "prompt",
+            "dialog",
+            "message",
+            "warning",
+            "success",
+            "successful",
+            "successfully",
+            "denied",
+            "rejected",
+            "refused",
+            "forbidden",
+            "empty",
+            "blank",
+            "missing",
+            "null",
+            "none",
+            "usage",
+            "help",
+            "info",
+            "hint",
+            "option",
+            "encryption",
+            "encrypted",
+            "decrypt",
+            "verify",
+            "verified",
+            "verification",
+            "enabled",
+            "disabled",
+            "enable",
+            "disable",
+            "set",
+            "unset",
+            "clear",
+            "cleared",
+        ]
+
+        if any(pattern in cred_lower for pattern in help_text_patterns):
+            return True
+
+        # Skip if it looks like a sentence or description (contains spaces after splitting)
+        if " " in credential.strip():
+            return True
+
+        # Skip common UI/shell command help patterns
+        # These typically appear as "password: <description>" in binary strings
+        if cred_type == "password":
+            # Check if the "credential" looks like help text syntax
+            if any(
+                credential.startswith(prefix)
+                for prefix in [
+                    "Password",
+                    "Passwords",
+                    "Re",
+                    "New",
+                    "Old",
+                    "Enter",
+                    "Type",
+                    "Invalid",
+                    "Incorrect",
+                    "Wrong",
+                    "Bad",
+                    "Your",
+                    "The",
+                    "A ",
+                    "An ",
+                ]
+            ):
+                return True
+
+        # Skip generic programming/config tokens that aren't real secrets
+        generic_tokens = [
+            "true",
+            "false",
+            "null",
+            "none",
+            "undefined",
+            "string",
+            "integer",
+            "boolean",
+            "array",
+            "object",
+            "default",
+            "value",
+            "name",
+            "path",
+            "file",
+            "dir",
+            "required",
+            "optional",
+            "deprecated",
+        ]
+
+        if cred_lower in generic_tokens:
+            return True
 
         return False
 

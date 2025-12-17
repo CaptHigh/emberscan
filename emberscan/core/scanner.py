@@ -448,8 +448,10 @@ class EmberScanner:
         from ..reporters.html_reporter import HTMLReporter
         from ..reporters.json_reporter import JSONReporter
 
-        report_dir = self.dirs["reports"] / session.id
-        report_dir.mkdir(exist_ok=True)
+        # Use configured output directory instead of workspace reports
+        output_base = Path(self.config.reporter.output_dir)
+        report_dir = output_base / session.id
+        report_dir.mkdir(parents=True, exist_ok=True)
 
         for format_name in self.config.reporter.output_formats:
             try:
