@@ -521,15 +521,15 @@ class QEMUManager:
         kernel_urls = {
             "mipsel": (
                 "https://github.com/firmadyne/kernel-v2.6/releases/download/v1.1/vmlinux.mipsel",
-                "vmlinux.mipsel"
+                "vmlinux.mipsel",
             ),
             "mips": (
                 "https://github.com/firmadyne/kernel-v2.6/releases/download/v1.1/vmlinux.mipseb",
-                "vmlinux.mipseb"
+                "vmlinux.mipseb",
             ),
             "arm": (
                 "https://github.com/firmadyne/kernel-v4.1/releases/download/v1.1/zImage.armel",
-                "zImage.armel"
+                "zImage.armel",
             ),
         }
 

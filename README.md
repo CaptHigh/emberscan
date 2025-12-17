@@ -18,6 +18,8 @@
 - **📊 CVE Correlation** - Match findings against known CVE database
 - **📝 Professional Reports** - HTML, JSON, and SARIF format reports
 - **🔌 Plugin System** - Extensible architecture for custom scanners
+- **📋 Terminal Summary** - Real-time vulnerability summary displayed in terminal
+- **🎯 Smart Credential Scanner** - Reduced false positives for accurate results
 
 ## 📋 Table of Contents
 
@@ -28,6 +30,7 @@
 - [Architecture](#-architecture)
 - [Configuration](#-configuration)
 - [Development](#-development)
+- [Changelog](#-changelog)
 - [Contributing](#-contributing)
 - [License](#-license)
 
@@ -91,18 +94,21 @@ emberscan check-deps
 # Basic scan
 emberscan scan firmware.bin
 
-# Full scan with all features
-emberscan scan firmware.bin --output ./reports --format html,json
+# Full scan with custom output directory
+emberscan scan firmware.bin -o ./my_reports --format html,json
 
 # Static analysis only (no emulation)
 emberscan scan firmware.bin --static-only
+
+# Scan with specific scanners
+emberscan scan firmware.bin --scanners web,credentials,binary
 ```
 
 ### 2. Extract & Analyze
 
 ```bash
 # Extract firmware filesystem
-emberscan extract firmware.bin --output ./extracted
+emberscan extract firmware.bin -o ./extracted
 
 # Analyze without extraction
 emberscan extract firmware.bin --analyze-only
@@ -111,6 +117,9 @@ emberscan extract firmware.bin --analyze-only
 ### 3. Emulate Firmware
 
 ```bash
+# Download emulation kernels first
+emberscan download-kernels
+
 # Start emulation with web interface
 emberscan emulate firmware.bin --http-port 8080
 
@@ -121,7 +130,7 @@ emberscan emulate firmware.bin --http-port 8080
 
 ```bash
 # Connect CH341A programmer and read flash
-emberscan spi-read --programmer ch341a_spi --output dump.bin
+emberscan spi-read --programmer ch341a_spi -o dump.bin
 ```
 
 ## 📖 Usage
@@ -161,6 +170,25 @@ Global Options:
   --debug         Enable debug logging
   -v, --version   Show version
 ```
+
+#### Scan Command Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-o, --output` | Output directory for reports | `./emberscan_reports` |
+| `-n, --name` | Custom name for scan session | Auto-generated |
+| `--scanners` | Comma-separated list of scanners | All enabled |
+| `--static-only` | Skip emulation (static analysis only) | False |
+| `--no-report` | Skip report generation | False |
+| `--format` | Report formats (html,json,sarif) | `html,json` |
+| `--timeout` | Scan timeout in seconds | 1800 |
+
+#### Download Kernels Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--arch` | Architecture to download (mipsel,mips,arm) | All |
+| `-o, --output` | Output directory for kernels | `./kernels` |
 
 ### Python API
 
@@ -369,6 +397,36 @@ python -m build
 # Build Docker image
 docker build -t emberscan:latest .
 ```
+
+## 📝 Changelog
+
+### v0.2.0 (Latest)
+
+#### New Features
+- **Terminal Vulnerability Summary**: Scan results now display top 10 vulnerabilities directly in the terminal with severity-color coding
+- **Custom Output Directory**: The `-o` flag now properly saves reports to the specified directory (displays absolute path)
+- **Improved Error Messages**: Specific error handling for extraction failures, encrypted firmware, and unsupported formats with troubleshooting tips
+
+#### Bug Fixes
+- **Fixed Report Path Mismatch**: Reports are now saved to the user-specified output directory instead of internal workspace
+- **Fixed Kernel Download 404 Errors**: Updated kernel download URLs to use correct [firmadyne releases](https://github.com/firmadyne/firmadyne)
+- **Reduced Credential Scanner False Positives**:
+  - Skip system binaries (passwd, login, su, etc.) that contain password-related help text
+  - Filter out UI strings, error messages, and prompts (e.g., "password: Retype...")
+  - Detect and skip ELF binaries in system directories
+- **Kernel Download Status**: Now correctly shows success/failure per architecture instead of always showing success
+
+#### Improvements
+- Better validation for firmware files (checks for empty files, directories, permissions)
+- Enhanced extraction error messages with specific troubleshooting guidance
+- Absolute paths shown in output for clarity
+
+### v0.1.0
+
+- Initial release with core scanning capabilities
+- Support for MIPS, ARM, x86 architectures
+- Web, network, binary, credential, and crypto scanners
+- HTML and JSON report generation
 
 ## 🤝 Contributing
 

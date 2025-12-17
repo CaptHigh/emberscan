@@ -219,7 +219,9 @@ def cmd_scan(args, config: Config):
         with open(firmware_path, "rb") as f:
             header = f.read(16)
             if len(header) < 16:
-                print(f"{Colors.FAIL}Error: Firmware file too small ({file_size} bytes){Colors.END}")
+                print(
+                    f"{Colors.FAIL}Error: Firmware file too small ({file_size} bytes){Colors.END}"
+                )
                 sys.exit(1)
 
     except PermissionError:
@@ -285,7 +287,9 @@ def cmd_scan(args, config: Config):
         if all_vulns:
             # Sort by severity (critical first)
             severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-            sorted_vulns = sorted(all_vulns, key=lambda v: severity_order.get(v.severity.value.lower(), 5))
+            sorted_vulns = sorted(
+                all_vulns, key=lambda v: severity_order.get(v.severity.value.lower(), 5)
+            )
 
             # Show top vulnerabilities
             print(f"\n{Colors.CYAN}Top Vulnerabilities:{Colors.END}")
@@ -296,7 +300,9 @@ def cmd_scan(args, config: Config):
                 if shown_count >= max_to_show:
                     remaining = len(sorted_vulns) - shown_count
                     if remaining > 0:
-                        print(f"\n  ... and {remaining} more vulnerabilities (see report for details)")
+                        print(
+                            f"\n  ... and {remaining} more vulnerabilities (see report for details)"
+                        )
                     break
 
                 severity_color = {
@@ -307,12 +313,18 @@ def cmd_scan(args, config: Config):
                     "info": Colors.END,
                 }.get(vuln.severity.value.lower(), Colors.END)
 
-                print(f"\n  [{severity_color}{vuln.severity.value.upper()}{Colors.END}] {vuln.title}")
+                print(
+                    f"\n  [{severity_color}{vuln.severity.value.upper()}{Colors.END}] {vuln.title}"
+                )
                 if vuln.file_path:
                     print(f"    File: {vuln.file_path}")
                 if vuln.description:
                     # Truncate long descriptions
-                    desc = vuln.description[:100] + "..." if len(vuln.description) > 100 else vuln.description
+                    desc = (
+                        vuln.description[:100] + "..."
+                        if len(vuln.description) > 100
+                        else vuln.description
+                    )
                     print(f"    {desc}")
                 shown_count += 1
 
@@ -366,6 +378,7 @@ def cmd_scan(args, config: Config):
 
         if args.debug:
             import traceback
+
             traceback.print_exc()
         sys.exit(1)
 
@@ -583,7 +596,9 @@ def cmd_download_kernels(args, config: Config):
     failed = [arch for arch, success in results.items() if not success]
 
     if successful:
-        print(f"\n{Colors.GREEN}Successfully downloaded kernels for: {', '.join(successful)}{Colors.END}")
+        print(
+            f"\n{Colors.GREEN}Successfully downloaded kernels for: {', '.join(successful)}{Colors.END}"
+        )
         print(f"{Colors.GREEN}Kernels saved to: {Path(args.output).absolute()}{Colors.END}")
 
     if failed:
@@ -593,7 +608,9 @@ def cmd_download_kernels(args, config: Config):
         print(f"  - ARM:  https://github.com/firmadyne/kernel-v4.1/releases")
 
     if not successful and not failed:
-        print(f"\n{Colors.WARNING}No kernels to download (all already exist or no valid architectures specified){Colors.END}")
+        print(
+            f"\n{Colors.WARNING}No kernels to download (all already exist or no valid architectures specified){Colors.END}"
+        )
 
     if failed:
         sys.exit(1)
