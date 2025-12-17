@@ -193,6 +193,77 @@ Examples:
     return parser
 
 
+def _detect_arch_from_rootfs(rootfs_path: Path) -> Optional["Architecture"]:
+    """
+    Detect architecture by examining ELF binaries in the extracted rootfs.
+
+    Returns the detected Architecture or None if detection fails.
+    """
+    import struct
+
+    from emberscan.core.models import Architecture, Endianness
+
+    # Common binary locations to check
+    check_paths = [
+        "bin/busybox",
+        "bin/sh",
+        "usr/bin/busybox",
+        "sbin/init",
+        "lib/libc.so.0",
+        "lib/libc.so.6",
+        "usr/lib/libc.so.0",
+    ]
+
+    # ELF machine type mapping
+    elf_arch_map = {
+        0x03: Architecture.X86,
+        0x08: "MIPS",  # Need to check endianness
+        0x14: Architecture.PPC,
+        0x28: Architecture.ARM,
+        0x3E: Architecture.X86_64,
+        0xB7: Architecture.ARM64,
+    }
+
+    for check_path in check_paths:
+        elf_path = rootfs_path / check_path
+        if not elf_path.exists():
+            continue
+
+        try:
+            with open(elf_path, "rb") as f:
+                header = f.read(52)
+
+                # Check ELF magic
+                if header[:4] != b"\x7fELF":
+                    continue
+
+                # Get endianness (byte 5)
+                endian = Endianness.LITTLE if header[5] == 1 else Endianness.BIG
+
+                # Get machine type (bytes 18-19)
+                if endian == Endianness.LITTLE:
+                    machine = struct.unpack("<H", header[18:20])[0]
+                else:
+                    machine = struct.unpack(">H", header[18:20])[0]
+
+                arch = elf_arch_map.get(machine)
+                if arch == "MIPS":
+                    # Determine MIPS variant from endianness
+                    arch = (
+                        Architecture.MIPS_LE
+                        if endian == Endianness.LITTLE
+                        else Architecture.MIPS_BE
+                    )
+
+                if arch and arch != Architecture.UNKNOWN:
+                    return arch
+
+        except (IOError, struct.error):
+            continue
+
+    return None
+
+
 def cmd_scan(args, config: Config):
     """Execute scan command."""
     logger = get_logger("cli")
@@ -473,13 +544,43 @@ def cmd_emulate(args, config: Config):
     # Create firmware info
     firmware = FirmwareInfo(file_path=str(firmware_path))
 
+    # Architecture detection
     if args.arch:
         firmware.architecture = Architecture.from_string(args.arch)
+        print(
+            f"\n{Colors.CYAN}[*] Using specified architecture: {firmware.architecture.value}{Colors.END}"
+        )
     else:
-        # Auto-detect from extracted files
+        # Auto-detect from firmware/extracted files
+        print(f"\n{Colors.CYAN}[*] Auto-detecting architecture...{Colors.END}")
         extractor = FirmwareExtractor(config)
         analysis = extractor.analyze(str(firmware_path))
         firmware.architecture = analysis["architecture"]
+
+        if firmware.architecture == Architecture.UNKNOWN:
+            print(f"\n{Colors.FAIL}Error: Could not auto-detect architecture{Colors.END}")
+            print(f"\n{Colors.WARNING}Please specify the architecture manually:{Colors.END}")
+            print(f"  emberscan emulate {args.firmware} --arch <architecture>")
+            print(f"\n  Supported architectures: mipsel, mips, arm, aarch64, x86, x86_64")
+            print(
+                f"\n{Colors.CYAN}Tip: Check vendor documentation or use 'file' command on extracted binaries{Colors.END}"
+            )
+
+            # Show what was detected in the firmware
+            if analysis.get("components"):
+                print(f"\n{Colors.CYAN}Detected components:{Colors.END}")
+                for comp in analysis["components"][:5]:
+                    print(f"  - {comp['offset_hex']}: {comp['description']}")
+
+            sys.exit(1)
+
+        print(f"    Detected: {firmware.architecture.value}")
+
+        # Show additional detection info
+        if analysis.get("endianness"):
+            print(f"    Endianness: {analysis['endianness'].value}")
+        if analysis.get("filesystem_type"):
+            print(f"    Filesystem: {analysis['filesystem_type'].value}")
 
     # Check if it's extracted rootfs or raw firmware
     if firmware_path.is_dir():
@@ -487,11 +588,24 @@ def cmd_emulate(args, config: Config):
         firmware.extracted = True
     else:
         # Extract first
-        print(f"{Colors.CYAN}[*] Extracting firmware...{Colors.END}")
+        print(f"\n{Colors.CYAN}[*] Extracting firmware...{Colors.END}")
         extractor = FirmwareExtractor(config)
         rootfs = extractor.extract(str(firmware_path), "./emulation_temp")
         firmware.rootfs_path = str(rootfs)
         firmware.extracted = True
+
+        # Re-detect architecture from extracted ELF binaries for better accuracy
+        if not args.arch:
+            print(f"{Colors.CYAN}[*] Verifying architecture from extracted binaries...{Colors.END}")
+            detected_arch = _detect_arch_from_rootfs(Path(rootfs))
+            if detected_arch and detected_arch != Architecture.UNKNOWN:
+                if detected_arch != firmware.architecture:
+                    print(
+                        f"    Updated architecture: {firmware.architecture.value} -> {detected_arch.value}"
+                    )
+                    firmware.architecture = detected_arch
+                else:
+                    print(f"    Confirmed: {detected_arch.value}")
 
     print(f"\n{Colors.CYAN}[*] Starting QEMU emulation...{Colors.END}")
     print(f"    Architecture: {firmware.architecture.value}")
@@ -537,12 +651,31 @@ def cmd_emulate(args, config: Config):
             print(
                 f"\n{Colors.WARNING}Boot timeout - firmware may not be fully functional{Colors.END}"
             )
+            print(f"\n{Colors.CYAN}Troubleshooting tips:{Colors.END}")
+            print(f"  1. Check if the architecture is correct: {firmware.architecture.value}")
+            print(f"     - TP-Link Archer AX routers are typically ARM (aarch64 or arm)")
+            print(f"     - Older routers are often MIPS (mipsel or mips)")
+            print(f"  2. Try specifying architecture manually:")
+            print(f"     emberscan emulate {args.firmware} --arch arm")
+            print(f"  3. Ensure emulation kernels are downloaded:")
+            print(f"     emberscan download-kernels")
+            print(f"  4. Check logs for errors: logs/emberscan_*.log")
 
         manager.stop(state)
         print(f"\n{Colors.CYAN}Emulation stopped{Colors.END}")
 
     except Exception as e:
-        print(f"\n{Colors.FAIL}Emulation failed: {e}{Colors.END}")
+        from emberscan.core.exceptions import KernelNotFoundError, EmulationError
+
+        if isinstance(e, KernelNotFoundError):
+            print(f"\n{Colors.FAIL}Kernel not found: {e}{Colors.END}")
+            print(
+                f"\n{Colors.WARNING}Run 'emberscan download-kernels' to download emulation kernels{Colors.END}"
+            )
+        elif isinstance(e, EmulationError):
+            print(f"\n{Colors.FAIL}Emulation error: {e}{Colors.END}")
+        else:
+            print(f"\n{Colors.FAIL}Emulation failed: {e}{Colors.END}")
         sys.exit(1)
 
 

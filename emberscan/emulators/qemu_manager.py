@@ -248,7 +248,25 @@ class QEMUManager:
             # Check if QEMU is still running
             process = self._instances.get(state.id)
             if not process or process.poll() is not None:
-                logger.error("QEMU process terminated unexpectedly")
+                # Try to capture error output
+                error_msg = "Unknown error"
+                if process:
+                    try:
+                        _, stderr = process.communicate(timeout=1)
+                        if stderr:
+                            error_msg = stderr.decode("utf-8", errors="ignore").strip()
+                            # Get last few lines of error
+                            error_lines = error_msg.split("\n")[-5:]
+                            error_msg = "\n".join(error_lines)
+                    except Exception:
+                        pass
+
+                    exit_code = process.returncode
+                    logger.error(f"QEMU process terminated unexpectedly (exit code: {exit_code})")
+                    if error_msg and error_msg != "Unknown error":
+                        logger.error(f"QEMU error output:\n{error_msg}")
+                else:
+                    logger.error("QEMU process terminated unexpectedly")
                 return False
 
             # Check HTTP port
