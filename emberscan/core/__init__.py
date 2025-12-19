@@ -3,25 +3,25 @@ Core modules for EmberScan.
 """
 
 from .config import Config
-from .logger import get_logger, setup_logging
-from .scanner import EmberScanner
-from .models import (
-    FirmwareInfo,
-    Vulnerability,
-    ScanResult,
-    ScanSession,
-    EmulationState,
-    Architecture,
-    Severity,
-    VulnerabilityType,
-    ScanStatus,
-)
 from .exceptions import (
     EmberScanError,
-    ExtractionError,
     EmulationError,
+    ExtractionError,
     ScannerError,
 )
+from .logger import get_logger, setup_logging
+from .models import (
+    Architecture,
+    EmulationState,
+    FirmwareInfo,
+    ScanResult,
+    ScanSession,
+    ScanStatus,
+    Severity,
+    Vulnerability,
+    VulnerabilityType,
+)
+from .scanner import EmberScanner
 
 __all__ = [
     "Config",

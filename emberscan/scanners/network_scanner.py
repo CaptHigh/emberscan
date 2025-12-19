@@ -11,21 +11,22 @@ Scans network services for vulnerabilities including:
 
 import socket
 import subprocess
-import defusedxml.ElementTree as ET
-from typing import List, Dict, Optional, Any
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from .base import BaseScanner, ScannerRegistry
+import defusedxml.ElementTree as ET
+
 from ..core.config import Config
 from ..core.logger import get_logger
 from ..core.models import (
     FirmwareInfo,
     ScanResult,
     ScanStatus,
-    Vulnerability,
     Severity,
+    Vulnerability,
     VulnerabilityType,
 )
+from .base import BaseScanner, ScannerRegistry
 
 logger = get_logger(__name__)
 

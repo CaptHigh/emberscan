@@ -11,23 +11,23 @@ Analyzes executable binaries in firmware for security issues:
 
 import os
 import re
-import subprocess
 import struct
-from pathlib import Path
-from typing import List, Dict, Optional, Any, Set
+import subprocess
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
-from .base import BaseScanner, ScannerRegistry
 from ..core.config import Config
 from ..core.logger import get_logger
 from ..core.models import (
     FirmwareInfo,
     ScanResult,
     ScanStatus,
-    Vulnerability,
     Severity,
+    Vulnerability,
     VulnerabilityType,
 )
+from .base import BaseScanner, ScannerRegistry
 
 logger = get_logger(__name__)
 

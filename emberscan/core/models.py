@@ -5,13 +5,13 @@ Defines dataclasses and enums for representing firmware,
 vulnerabilities, scan results, and other core entities.
 """
 
-import uuid
 import hashlib
-from enum import Enum, auto
-from datetime import datetime
+import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from datetime import datetime
+from enum import Enum, auto
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 
 class Architecture(Enum):

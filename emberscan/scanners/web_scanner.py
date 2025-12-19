@@ -13,21 +13,21 @@ Scans web interfaces for common vulnerabilities including:
 import re
 import socket
 import subprocess
-from urllib.parse import urljoin, urlparse, parse_qs
-from typing import List, Dict, Optional, Any
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, urljoin, urlparse
 
-from .base import BaseScanner, ScannerRegistry
 from ..core.config import Config
 from ..core.logger import get_logger
 from ..core.models import (
     FirmwareInfo,
     ScanResult,
     ScanStatus,
-    Vulnerability,
     Severity,
+    Vulnerability,
     VulnerabilityType,
 )
+from .base import BaseScanner, ScannerRegistry
 
 logger = get_logger(__name__)
 

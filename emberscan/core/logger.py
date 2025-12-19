@@ -5,13 +5,13 @@ Provides structured logging with colored console output
 and optional file logging with rotation.
 """
 
+import logging
 import os
 import sys
-import logging
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
-from logging.handlers import RotatingFileHandler
 
 
 # ANSI color codes

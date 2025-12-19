@@ -20,8 +20,8 @@ __author__ = "EmberScan Team"
 __license__ = "MIT"
 
 from emberscan.core.config import Config
-from emberscan.core.scanner import EmberScanner
 from emberscan.core.logger import get_logger
+from emberscan.core.scanner import EmberScanner
 
 __all__ = [
     "Config",

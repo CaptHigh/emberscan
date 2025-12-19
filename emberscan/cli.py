@@ -12,9 +12,9 @@ Usage:
     emberscan --version
 """
 
+import argparse
 import os
 import sys
-import argparse
 from pathlib import Path
 from typing import Optional
 
@@ -23,11 +23,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from emberscan import __version__
 from emberscan.core.config import Config
+from emberscan.core.logger import get_logger, setup_logging
 from emberscan.core.scanner import EmberScanner
-from emberscan.core.logger import setup_logging, get_logger
-from emberscan.extractors.firmware_extractor import FirmwareExtractor, SPIExtractor
 from emberscan.emulators.qemu_manager import QEMUManager
-from emberscan.utils import print_dependency_status, check_dependencies
+from emberscan.extractors.firmware_extractor import FirmwareExtractor, SPIExtractor
+from emberscan.utils import check_dependencies, print_dependency_status
 
 
 # ANSI Colors
@@ -415,12 +415,12 @@ def cmd_scan(args, config: Config):
         sys.exit(130)
     except Exception as e:
         from emberscan.core.exceptions import (
-            FilesystemExtractionError,
-            EncryptedFirmwareError,
-            UnsupportedFirmwareError,
-            ExtractionError,
             EmulationError,
+            EncryptedFirmwareError,
+            ExtractionError,
+            FilesystemExtractionError,
             ScannerError,
+            UnsupportedFirmwareError,
         )
 
         # Provide specific helpful messages for common errors
@@ -506,8 +506,8 @@ def cmd_extract(args, config: Config):
         print(f"\n{Colors.GREEN}Extraction complete: {Path(rootfs).absolute()}{Colors.END}")
     except Exception as e:
         from emberscan.core.exceptions import (
-            FilesystemExtractionError,
             EncryptedFirmwareError,
+            FilesystemExtractionError,
             UnsupportedFirmwareError,
         )
 
@@ -530,7 +530,7 @@ def cmd_extract(args, config: Config):
 
 def cmd_emulate(args, config: Config):
     """Execute emulate command."""
-    from emberscan.core.models import FirmwareInfo, Architecture
+    from emberscan.core.models import Architecture, FirmwareInfo
 
     firmware_path = Path(args.firmware)
 
@@ -665,7 +665,7 @@ def cmd_emulate(args, config: Config):
         print(f"\n{Colors.CYAN}Emulation stopped{Colors.END}")
 
     except Exception as e:
-        from emberscan.core.exceptions import KernelNotFoundError, EmulationError
+        from emberscan.core.exceptions import EmulationError, KernelNotFoundError
 
         if isinstance(e, KernelNotFoundError):
             print(f"\n{Colors.FAIL}Kernel not found: {e}{Colors.END}")

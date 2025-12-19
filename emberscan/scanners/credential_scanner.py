@@ -9,18 +9,18 @@ Scans firmware for hardcoded credentials, API keys, and secrets:
 - Database credentials
 """
 
+import base64
+import hashlib
 import os
 import re
-import hashlib
-import base64
-from pathlib import Path
-from typing import List, Dict, Optional, Set
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
-from .base import BaseScanner, ScannerRegistry
 from ..core.config import Config
 from ..core.logger import get_logger
-from ..core.models import FirmwareInfo, ScanResult, Vulnerability, Severity, VulnerabilityType
+from ..core.models import FirmwareInfo, ScanResult, Severity, Vulnerability, VulnerabilityType
+from .base import BaseScanner, ScannerRegistry
 
 logger = get_logger(__name__)
 

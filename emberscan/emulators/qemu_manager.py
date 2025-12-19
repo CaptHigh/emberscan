@@ -6,28 +6,28 @@ multiple architectures (MIPS, ARM, x86, PowerPC).
 """
 
 import os
-import time
+import shutil
 import signal
 import socket
-import shutil
 import subprocess
 import tempfile
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
 
 from ..core.config import Config
-from ..core.logger import get_logger
-from ..core.models import FirmwareInfo, EmulationState, Architecture, Endianness
 from ..core.exceptions import (
-    EmulationError,
-    QEMUNotFoundError,
-    KernelNotFoundError,
-    EmulationTimeoutError,
     EmulationBootFailure,
+    EmulationError,
+    EmulationTimeoutError,
+    KernelNotFoundError,
     NetworkConfigurationError,
+    QEMUNotFoundError,
     UnsupportedArchitectureError,
 )
+from ..core.logger import get_logger
+from ..core.models import Architecture, EmulationState, Endianness, FirmwareInfo
 
 logger = get_logger(__name__)
 

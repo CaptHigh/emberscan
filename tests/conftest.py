@@ -4,15 +4,16 @@ Pytest configuration and fixtures for EmberScan tests.
 
 import os
 import sys
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from emberscan.core.config import Config
-from emberscan.core.models import FirmwareInfo, Architecture
+from emberscan.core.models import Architecture, FirmwareInfo
 
 
 @pytest.fixture(scope="session")

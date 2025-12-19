@@ -5,31 +5,31 @@ Coordinates firmware extraction, emulation, vulnerability scanning,
 and report generation.
 """
 
+import asyncio
 import os
 import time
-import asyncio
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional, Type
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Type
 
 from .config import Config
-from .logger import get_logger, setup_logging, ProgressLogger
+from .exceptions import (
+    ConfigurationError,
+    EmberScanError,
+    EmulationError,
+    ExtractionError,
+    ScannerError,
+)
+from .logger import ProgressLogger, get_logger, setup_logging
 from .models import (
+    Architecture,
+    EmulationState,
     FirmwareInfo,
-    ScanSession,
     ScanResult,
+    ScanSession,
     ScanStatus,
     Vulnerability,
-    EmulationState,
-    Architecture,
-)
-from .exceptions import (
-    EmberScanError,
-    ExtractionError,
-    EmulationError,
-    ScannerError,
-    ConfigurationError,
 )
 
 logger = get_logger(__name__)

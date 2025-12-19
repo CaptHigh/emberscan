@@ -8,19 +8,19 @@ Correlates firmware components with known CVEs:
 - Embedded device CVE database
 """
 
+import json
 import os
 import re
-import json
 import subprocess
-from pathlib import Path
-from typing import List, Dict, Optional, Set, Any
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
-from .base import BaseScanner, ScannerRegistry
 from ..core.config import Config
 from ..core.logger import get_logger
-from ..core.models import FirmwareInfo, ScanResult, Vulnerability, Severity, VulnerabilityType
+from ..core.models import FirmwareInfo, ScanResult, Severity, Vulnerability, VulnerabilityType
+from .base import BaseScanner, ScannerRegistry
 
 logger = get_logger(__name__)
 

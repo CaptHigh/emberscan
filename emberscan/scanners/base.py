@@ -7,11 +7,11 @@ the scan() method.
 
 import abc
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from ..core.config import Config
 from ..core.logger import get_logger
-from ..core.models import FirmwareInfo, ScanResult, ScanStatus, Vulnerability, Severity
+from ..core.models import FirmwareInfo, ScanResult, ScanStatus, Severity, Vulnerability
 
 logger = get_logger(__name__)
 
