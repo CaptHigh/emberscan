@@ -155,6 +155,12 @@ Examples:
     emulate_parser.add_argument(
         "--debug", action="store_true", help="Enable GDB debugging (port 1234)"
     )
+    emulate_parser.add_argument(
+        "--display",
+        choices=["none", "gtk", "sdl", "curses", "console"],
+        default="none",
+        help="Display mode: none (headless), gtk/sdl (GUI window), curses (terminal), console (serial output)",
+    )
 
     # =========================================================================
     # SPI Read command
@@ -611,6 +617,8 @@ def cmd_emulate(args, config: Config):
     print(f"    Architecture: {firmware.architecture.value}")
     print(f"    HTTP port:    {args.http_port}")
     print(f"    SSH port:     {args.ssh_port}")
+    if args.display != "none":
+        print(f"    Display:      {args.display}")
 
     try:
         manager = QEMUManager(config)
@@ -621,6 +629,7 @@ def cmd_emulate(args, config: Config):
             ssh_port=args.ssh_port,
             telnet_port=args.telnet_port,
             enable_debug=args.debug,
+            display_mode=args.display,
         )
 
         print(f"\n{Colors.GREEN}QEMU started (PID: {state.pid}){Colors.END}")

@@ -122,6 +122,7 @@ class QEMUManager:
         telnet_port: int = 2323,
         debug_port: int = 1234,
         enable_debug: bool = False,
+        display_mode: str = "none",
     ) -> EmulationState:
         """
         Start QEMU emulation for firmware.
@@ -133,6 +134,7 @@ class QEMUManager:
             telnet_port: Host port for Telnet forwarding
             debug_port: GDB debug port
             enable_debug: Enable GDB server
+            display_mode: Display mode (none, gtk, sdl, curses, console)
 
         Returns:
             EmulationState with connection info
@@ -178,19 +180,30 @@ class QEMUManager:
             rootfs_image=rootfs_image,
             state=state,
             enable_debug=enable_debug,
+            display_mode=display_mode,
         )
 
         state.qemu_command = " ".join(qemu_cmd)
         logger.debug(f"QEMU command: {state.qemu_command}")
 
         # Start QEMU process
+        # For console mode, don't capture output so user can interact
         try:
-            process = subprocess.Popen(
-                qemu_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.PIPE,
-            )
+            if display_mode == "console":
+                # Interactive console - inherit stdio
+                process = subprocess.Popen(
+                    qemu_cmd,
+                    stdin=None,
+                    stdout=None,
+                    stderr=None,
+                )
+            else:
+                process = subprocess.Popen(
+                    qemu_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.PIPE,
+                )
 
             state.pid = process.pid
             state.running = True
@@ -435,6 +448,7 @@ class QEMUManager:
         rootfs_image: Path,
         state: EmulationState,
         enable_debug: bool,
+        display_mode: str = "none",
     ) -> List[str]:
         """Build QEMU command line."""
         cmd = [
@@ -449,8 +463,24 @@ class QEMUManager:
             f"file={rootfs_image},format=raw,if=virtio",
             "-append",
             f"root=/dev/vda console={profile.console} rw",
-            "-nographic",
         ]
+
+        # Display mode configuration
+        if display_mode == "none":
+            # Headless mode - no display
+            cmd.append("-nographic")
+        elif display_mode == "gtk":
+            # GTK GUI window
+            cmd.extend(["-display", "gtk"])
+        elif display_mode == "sdl":
+            # SDL GUI window
+            cmd.extend(["-display", "sdl"])
+        elif display_mode == "curses":
+            # Text-mode display in terminal
+            cmd.extend(["-display", "curses"])
+        elif display_mode == "console":
+            # Serial console to terminal - shows boot messages and allows interaction
+            cmd.extend(["-serial", "mon:stdio", "-nographic"])
 
         # Add CPU if specified
         if profile.cpu:
