@@ -2,21 +2,22 @@
 Tests for EmberScan core functionality.
 """
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from emberscan.core.config import Config, QEMUConfig, ScannerConfig
+from emberscan.core.exceptions import EmberScanError, ExtractionError
 from emberscan.core.models import (
+    Architecture,
     FirmwareInfo,
-    Vulnerability,
     ScanResult,
     ScanSession,
-    Architecture,
-    Severity,
-    VulnerabilityType,
     ScanStatus,
+    Severity,
+    Vulnerability,
+    VulnerabilityType,
 )
-from emberscan.core.exceptions import EmberScanError, ExtractionError
 
 
 class TestConfig:

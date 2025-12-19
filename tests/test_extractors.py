@@ -2,11 +2,12 @@
 Tests for firmware extraction functionality.
 """
 
-import pytest
 from pathlib import Path
 
+import pytest
+
+from emberscan.core.models import Architecture, Endianness, FilesystemType
 from emberscan.extractors.firmware_extractor import FirmwareExtractor, SPIExtractor
-from emberscan.core.models import Architecture, FilesystemType, Endianness
 
 
 class TestFirmwareExtractor:

@@ -2,13 +2,14 @@
 Tests for EmberScan vulnerability scanners.
 """
 
-import pytest
 from pathlib import Path
 
+import pytest
+
+from emberscan.core.models import ScanStatus, Severity
 from emberscan.scanners.base import BaseScanner, ScannerRegistry
 from emberscan.scanners.binary_scanner import BinaryScanner
 from emberscan.scanners.credential_scanner import CredentialScanner
-from emberscan.core.models import ScanStatus, Severity
 
 
 class TestScannerRegistry:

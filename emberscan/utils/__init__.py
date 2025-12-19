@@ -2,11 +2,11 @@
 Utility functions for EmberScan.
 """
 
-import os
-import sys
 import hashlib
-import subprocess
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 

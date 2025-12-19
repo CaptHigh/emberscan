@@ -11,14 +11,14 @@ Analyzes firmware for cryptographic weaknesses:
 
 import re
 import struct
-from pathlib import Path
-from typing import List, Dict, Optional, Set
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
-from .base import BaseScanner, ScannerRegistry
 from ..core.config import Config
 from ..core.logger import get_logger
-from ..core.models import FirmwareInfo, ScanResult, Vulnerability, Severity, VulnerabilityType
+from ..core.models import FirmwareInfo, ScanResult, Severity, Vulnerability, VulnerabilityType
+from .base import BaseScanner, ScannerRegistry
 
 logger = get_logger(__name__)
 

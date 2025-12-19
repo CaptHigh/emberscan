@@ -7,22 +7,22 @@ SPI flash dumps, manufacturer firmware files, and compressed images.
 
 import os
 import re
-import struct
 import shutil
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.config import Config
+from ..core.exceptions import (
+    EncryptedFirmwareError,
+    ExtractionError,
+    FilesystemExtractionError,
+    UnsupportedFirmwareError,
+)
 from ..core.logger import get_logger
 from ..core.models import Architecture, Endianness, FilesystemType, FirmwareInfo
-from ..core.exceptions import (
-    ExtractionError,
-    UnsupportedFirmwareError,
-    EncryptedFirmwareError,
-    FilesystemExtractionError,
-)
 
 logger = get_logger(__name__)
 

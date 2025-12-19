@@ -6,28 +6,28 @@ multiple architectures (MIPS, ARM, x86, PowerPC).
 """
 
 import os
-import time
+import shutil
 import signal
 import socket
-import shutil
 import subprocess
 import tempfile
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
 
 from ..core.config import Config
-from ..core.logger import get_logger
-from ..core.models import FirmwareInfo, EmulationState, Architecture, Endianness
 from ..core.exceptions import (
-    EmulationError,
-    QEMUNotFoundError,
-    KernelNotFoundError,
-    EmulationTimeoutError,
     EmulationBootFailure,
+    EmulationError,
+    EmulationTimeoutError,
+    KernelNotFoundError,
     NetworkConfigurationError,
+    QEMUNotFoundError,
     UnsupportedArchitectureError,
 )
+from ..core.logger import get_logger
+from ..core.models import Architecture, EmulationState, Endianness, FirmwareInfo
 
 logger = get_logger(__name__)
 
@@ -122,6 +122,7 @@ class QEMUManager:
         telnet_port: int = 2323,
         debug_port: int = 1234,
         enable_debug: bool = False,
+        display_mode: str = "none",
     ) -> EmulationState:
         """
         Start QEMU emulation for firmware.
@@ -133,6 +134,7 @@ class QEMUManager:
             telnet_port: Host port for Telnet forwarding
             debug_port: GDB debug port
             enable_debug: Enable GDB server
+            display_mode: Display mode (none, gtk, sdl, curses, console)
 
         Returns:
             EmulationState with connection info
@@ -178,19 +180,30 @@ class QEMUManager:
             rootfs_image=rootfs_image,
             state=state,
             enable_debug=enable_debug,
+            display_mode=display_mode,
         )
 
         state.qemu_command = " ".join(qemu_cmd)
         logger.debug(f"QEMU command: {state.qemu_command}")
 
         # Start QEMU process
+        # For console mode, don't capture output so user can interact
         try:
-            process = subprocess.Popen(
-                qemu_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.PIPE,
-            )
+            if display_mode == "console":
+                # Interactive console - inherit stdio
+                process = subprocess.Popen(
+                    qemu_cmd,
+                    stdin=None,
+                    stdout=None,
+                    stderr=None,
+                )
+            else:
+                process = subprocess.Popen(
+                    qemu_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.PIPE,
+                )
 
             state.pid = process.pid
             state.running = True
@@ -248,7 +261,25 @@ class QEMUManager:
             # Check if QEMU is still running
             process = self._instances.get(state.id)
             if not process or process.poll() is not None:
-                logger.error("QEMU process terminated unexpectedly")
+                # Try to capture error output
+                error_msg = "Unknown error"
+                if process:
+                    try:
+                        _, stderr = process.communicate(timeout=1)
+                        if stderr:
+                            error_msg = stderr.decode("utf-8", errors="ignore").strip()
+                            # Get last few lines of error
+                            error_lines = error_msg.split("\n")[-5:]
+                            error_msg = "\n".join(error_lines)
+                    except Exception:
+                        pass
+
+                    exit_code = process.returncode
+                    logger.error(f"QEMU process terminated unexpectedly (exit code: {exit_code})")
+                    if error_msg and error_msg != "Unknown error":
+                        logger.error(f"QEMU error output:\n{error_msg}")
+                else:
+                    logger.error("QEMU process terminated unexpectedly")
                 return False
 
             # Check HTTP port
@@ -417,6 +448,7 @@ class QEMUManager:
         rootfs_image: Path,
         state: EmulationState,
         enable_debug: bool,
+        display_mode: str = "none",
     ) -> List[str]:
         """Build QEMU command line."""
         cmd = [
@@ -431,8 +463,24 @@ class QEMUManager:
             f"file={rootfs_image},format=raw,if=virtio",
             "-append",
             f"root=/dev/vda console={profile.console} rw",
-            "-nographic",
         ]
+
+        # Display mode configuration
+        if display_mode == "none":
+            # Headless mode - no display
+            cmd.append("-nographic")
+        elif display_mode == "gtk":
+            # GTK GUI window
+            cmd.extend(["-display", "gtk"])
+        elif display_mode == "sdl":
+            # SDL GUI window
+            cmd.extend(["-display", "sdl"])
+        elif display_mode == "curses":
+            # Text-mode display in terminal
+            cmd.extend(["-display", "curses"])
+        elif display_mode == "console":
+            # Serial console to terminal - shows boot messages and allows interaction
+            cmd.extend(["-serial", "mon:stdio", "-nographic"])
 
         # Add CPU if specified
         if profile.cpu:

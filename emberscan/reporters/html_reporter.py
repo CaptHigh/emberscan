@@ -8,16 +8,16 @@ Generates professional HTML reports with:
 - Remediation guidance
 """
 
-import os
 import json
-from pathlib import Path
+import os
 from datetime import datetime
-from typing import Dict, List, Optional
+from pathlib import Path
 from string import Template
+from typing import Dict, List, Optional
 
 from ..core.config import Config
 from ..core.logger import get_logger
-from ..core.models import ScanSession, Vulnerability, Severity
+from ..core.models import ScanSession, Severity, Vulnerability
 
 logger = get_logger(__name__)
 
