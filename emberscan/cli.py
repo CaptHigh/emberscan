@@ -162,9 +162,9 @@ Examples:
         help="Display mode: none (headless), gtk/sdl (GUI window), curses (terminal), console (serial output)",
     )
     emulate_parser.add_argument(
-        "--dvrf",
+        "--router-mode",
         action="store_true",
-        help="Enable DVRF (Damn Vulnerable Router Firmware) emulation mode with NVRAM support",
+        help="Enable router firmware emulation mode (NVRAM emulation, hardware script patching)",
     )
 
     # =========================================================================
@@ -624,8 +624,8 @@ def cmd_emulate(args, config: Config):
     print(f"    SSH port:     {args.ssh_port}")
     if args.display != "none":
         print(f"    Display:      {args.display}")
-    if getattr(args, 'dvrf', False):
-        print(f"    Mode:         {Colors.WARNING}DVRF (NVRAM emulation enabled){Colors.END}")
+    if getattr(args, 'router_mode', False):
+        print(f"    Mode:         {Colors.WARNING}Router (NVRAM emulation enabled){Colors.END}")
 
     try:
         manager = QEMUManager(config)
@@ -637,7 +637,7 @@ def cmd_emulate(args, config: Config):
             telnet_port=args.telnet_port,
             enable_debug=args.debug,
             display_mode=args.display,
-            dvrf_mode=getattr(args, 'dvrf', False),
+            router_mode=getattr(args, 'router_mode', False),
         )
 
         print(f"\n{Colors.GREEN}QEMU started (PID: {state.pid}){Colors.END}")

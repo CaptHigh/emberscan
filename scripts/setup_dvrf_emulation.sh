@@ -1,10 +1,9 @@
 #!/bin/bash
-# DVRF (Damn Vulnerable Router Firmware) Emulation Setup Script
-# This script sets up everything needed to emulate DVRF with EmberScan
+# Router Firmware Emulation Setup Script
+# This script sets up everything needed to emulate router firmware with EmberScan
 #
-# DVRF Project: https://github.com/praetorian-inc/DVRF
-# Architecture: MIPS Little Endian (mipsel)
-# Target: Linksys E1550 Router
+# Supports various router firmware including DVRF, OpenWrt, DD-WRT, etc.
+# Architectures: MIPS (LE/BE), ARM, ARM64
 
 set -e
 
@@ -22,8 +21,8 @@ DVRF_DIR="$FIRMWARE_DIR/DVRF"
 
 echo -e "${CYAN}"
 echo "╔════════════════════════════════════════════════════════════════════╗"
-echo "║           DVRF Emulation Setup for EmberScan                       ║"
-echo "║     Damn Vulnerable Router Firmware - MIPS Emulation               ║"
+echo "║           Router Firmware Emulation Setup for EmberScan            ║"
+echo "║     QEMU-based emulation for MIPS/ARM router firmware              ║"
 echo "╚════════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -293,33 +292,34 @@ EOF
 # =============================================================================
 print_usage() {
     echo -e "\n${GREEN}╔════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║           DVRF Emulation Setup Complete!                           ║${NC}"
+    echo -e "${GREEN}║           Router Emulation Setup Complete!                         ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════════════╝${NC}"
 
     echo -e "\n${CYAN}Next Steps:${NC}"
     echo -e ""
-    echo -e "${YELLOW}1. Extract and emulate DVRF firmware:${NC}"
-    echo -e "   emberscan extract firmware/DVRF/Firmware/DVRF_v03.bin"
+    echo -e "${YELLOW}1. Emulate any router firmware:${NC}"
+    echo -e "   emberscan emulate <firmware.bin> --display console"
+    echo -e "   # Router mode is auto-detected, or force with --router-mode"
+    echo -e ""
+    echo -e "${YELLOW}2. Example with DVRF:${NC}"
     echo -e "   emberscan emulate firmware/DVRF/Firmware/DVRF_v03.bin --display console"
     echo -e ""
-    echo -e "${YELLOW}2. Or use the DVRF config for full scanning:${NC}"
-    echo -e "   emberscan scan firmware/DVRF/Firmware/DVRF_v03.bin --config configs/dvrf_emulation.yaml"
-    echo -e ""
     echo -e "${YELLOW}3. For debugging with GDB:${NC}"
-    echo -e "   emberscan emulate firmware/DVRF/Firmware/DVRF_v03.bin --debug"
+    echo -e "   emberscan emulate <firmware.bin> --debug"
     echo -e "   # In another terminal:"
     echo -e "   gdb-multiarch -ex 'target remote localhost:1234'"
     echo -e ""
     echo -e "${YELLOW}4. Access emulated web interface:${NC}"
     echo -e "   http://localhost:8080 (after boot)"
     echo -e ""
-    echo -e "${CYAN}DVRF Pwnable Challenges:${NC}"
-    echo -e "   The firmware contains intentionally vulnerable binaries in /pwnable/"
-    echo -e "   - stack_bof_01: Stack buffer overflow"
-    echo -e "   - socket_bof: Socket-based buffer overflow"
+    echo -e "${CYAN}Supported Router Firmware:${NC}"
+    echo -e "   - DVRF (Damn Vulnerable Router Firmware)"
+    echo -e "   - Linksys (E-series, WRT-series)"
+    echo -e "   - TP-Link, D-Link, Netgear, ASUS"
+    echo -e "   - OpenWrt, DD-WRT based firmware"
     echo -e ""
     echo -e "${CYAN}Resources:${NC}"
-    echo -e "   DVRF Repo: https://github.com/praetorian-inc/DVRF"
+    echo -e "   DVRF: https://github.com/praetorian-inc/DVRF"
     echo -e "   EmberScan: https://github.com/emberscan/emberscan"
     echo -e ""
 }

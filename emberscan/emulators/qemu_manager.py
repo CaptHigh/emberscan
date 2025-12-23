@@ -123,7 +123,7 @@ class QEMUManager:
         debug_port: int = 1234,
         enable_debug: bool = False,
         display_mode: str = "none",
-        dvrf_mode: bool = False,
+        router_mode: bool = False,
     ) -> EmulationState:
         """
         Start QEMU emulation for firmware.
@@ -136,7 +136,7 @@ class QEMUManager:
             debug_port: GDB debug port
             enable_debug: Enable GDB server
             display_mode: Display mode (none, gtk, sdl, curses, console)
-            dvrf_mode: Enable DVRF-specific emulation optimizations
+            router_mode: Enable router firmware emulation (NVRAM, hardware script patching)
 
         Returns:
             EmulationState with connection info
@@ -147,26 +147,26 @@ class QEMUManager:
         if not firmware.rootfs_path or not Path(firmware.rootfs_path).exists():
             raise EmulationError("Firmware rootfs not found")
 
-        # Auto-detect DVRF mode if not explicitly set
-        from .dvrf_emulator import DVRFEmulator, detect_dvrf_firmware
+        # Auto-detect router firmware if not explicitly set
+        from .router_emulator import RouterEmulator, detect_router_firmware
 
-        if not dvrf_mode and detect_dvrf_firmware(firmware):
-            logger.info("Detected DVRF-like firmware, enabling DVRF optimizations")
-            dvrf_mode = True
+        if not router_mode and detect_router_firmware(firmware):
+            logger.info("Detected router firmware, enabling router emulation mode")
+            router_mode = True
 
-        # Apply DVRF-specific preparation if needed
+        # Apply router-specific preparation if needed
         prepared_rootfs = firmware.rootfs_path
-        if dvrf_mode:
-            logger.info("Applying DVRF emulation patches...")
-            dvrf_emulator = DVRFEmulator(self.config)
-            # Generate instance ID early for DVRF prep
+        if router_mode:
+            logger.info("Applying router emulation patches (NVRAM, init scripts)...")
+            router_emulator = RouterEmulator(self.config)
+            # Generate instance ID early for preparation
             temp_state = EmulationState(firmware_id=firmware.id)
-            prepared_rootfs = dvrf_emulator.prepare_firmware(
+            prepared_rootfs = router_emulator.prepare_firmware(
                 firmware, temp_state.id
             )
             # Update firmware info with prepared rootfs
             firmware.rootfs_path = str(prepared_rootfs)
-            logger.info(f"DVRF preparation complete: {prepared_rootfs}")
+            logger.info(f"Router firmware preparation complete: {prepared_rootfs}")
 
         # Get architecture profile
         profile = self.PROFILES.get(firmware.architecture)

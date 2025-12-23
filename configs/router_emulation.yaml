@@ -1,0 +1,82 @@
+# Router Firmware Emulation Configuration
+# This config is optimized for emulating embedded router firmware
+#
+# Supports: Linksys, TP-Link, D-Link, Netgear, ASUS, OpenWrt, DD-WRT, DVRF
+# Architectures: MIPS (LE/BE), ARM, ARM64
+
+project_name: Router-Emulation
+
+workspace_dir: ./workspace/router_emulation
+
+log_level: INFO
+
+# QEMU settings optimized for router firmware
+qemu:
+  # Increased timeout for slower embedded systems
+  timeout: 600
+
+  # Memory - 256MB works for most routers
+  memory: 256
+
+  # Enable networking for web interface testing
+  enable_network: true
+  network_mode: user
+
+  # Kernel directory (relative to project root)
+  kernel_dir: ./kernels
+
+  # Enable snapshot for faster reset during fuzzing
+  snapshot: true
+
+  # Debug settings for GDB attachment
+  debug_port: 1234
+
+  # Port forwarding (router services)
+  http_forward_port: 8080
+  ssh_forward_port: 2222
+  telnet_forward_port: 2323
+
+# Scanner settings for router firmware analysis
+scanner:
+  enabled_scanners:
+    - web           # Web interface vulnerabilities
+    - binary        # Binary analysis
+    - credentials   # Default credential discovery
+    - crypto        # Cryptographic issues
+    - network       # Network service security
+
+  parallel_scans: 2
+  timeout_per_scan: 900
+  max_depth: 10
+  follow_redirects: true
+  user_agent: "EmberScan/1.0 Router-Analysis"
+
+# Firmware extraction settings
+extractor:
+  auto_detect: true
+  max_extraction_depth: 5
+  supported_formats:
+    - squashfs
+    - cramfs
+    - jffs2
+    - ubifs
+  temp_dir: /tmp/emberscan-router
+
+# Report settings
+reporter:
+  output_formats:
+    - html
+    - json
+  output_dir: ./reports/router
+  include_evidence: true
+  severity_threshold: low
+
+# Common router web interface paths to test
+router_targets:
+  web_interfaces:
+    - /cgi-bin/
+    - /HNAP1/
+    - /goform/
+    - /apply.cgi
+    - /setup.cgi
+    - /login.cgi
