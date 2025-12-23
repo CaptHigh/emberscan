@@ -1,0 +1,83 @@
+# DVRF (Damn Vulnerable Router Firmware) Emulation Configuration
+# This config is optimized for emulating DVRF on EmberScan
+#
+# Target: Linksys E1550 Router
+# Architecture: MIPS Little Endian (mipsel)
+# Project: https://github.com/praetorian-inc/DVRF
+
+project_name: DVRF-Emulation
+
+workspace_dir: ./workspace/dvrf
+
+log_level: DEBUG
+
+# QEMU settings optimized for DVRF
+qemu:
+  # Increased timeout for slower emulation startup
+  timeout: 600
+
+  # Memory - DVRF works with 256MB
+  memory: 256
+
+  # Enable networking for web interface testing
+  enable_network: true
+  network_mode: user
+
+  # Kernel directory (relative to project root)
+  kernel_dir: ./kernels
+
+  # Enable snapshot for faster reset during fuzzing
+  snapshot: true
+
+  # Debug settings for GDB attachment
+  debug_port: 1234
+
+  # Port forwarding
+  # DVRF exposes a web interface on port 80
+  http_forward_port: 8080
+  ssh_forward_port: 2222
+  telnet_forward_port: 2323
+
+# Scanner settings for DVRF analysis
+scanner:
+  enabled_scanners:
+    - web           # Web interface vulnerabilities (DVRF has several)
+    - binary        # Binary analysis (pwnable binaries)
+    - credentials   # Default credential discovery
+    - crypto        # Cryptographic issues
+
+  parallel_scans: 2
+  timeout_per_scan: 900
+  max_depth: 10
+  follow_redirects: true
+  user_agent: "EmberScan/1.0 DVRF-Analysis"
+
+# Firmware extraction settings
+extractor:
+  auto_detect: true
+  max_extraction_depth: 5
+  supported_formats:
+    - squashfs
+    - cramfs
+    - jffs2
+  temp_dir: /tmp/emberscan-dvrf
+
+# Report settings
+reporter:
+  output_formats:
+    - html
+    - json
+  output_dir: ./reports/dvrf
+  include_evidence: true
+  severity_threshold: low
+
+# DVRF-specific pwnable binaries to analyze
+# These are the intentionally vulnerable binaries in DVRF
+dvrf_targets:
+  pwnable_binaries:
+    - stack_bof_01
+    - socket_bof
+    - uClibc_nfp_update
+  web_interfaces:
+    - /cgi-bin/
+    - /HNAP1/

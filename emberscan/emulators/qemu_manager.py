@@ -123,6 +123,7 @@ class QEMUManager:
         debug_port: int = 1234,
         enable_debug: bool = False,
         display_mode: str = "none",
+        dvrf_mode: bool = False,
     ) -> EmulationState:
         """
         Start QEMU emulation for firmware.
@@ -135,6 +136,7 @@ class QEMUManager:
             debug_port: GDB debug port
             enable_debug: Enable GDB server
             display_mode: Display mode (none, gtk, sdl, curses, console)
+            dvrf_mode: Enable DVRF-specific emulation optimizations
 
         Returns:
             EmulationState with connection info
@@ -144,6 +146,27 @@ class QEMUManager:
         # Validate firmware
         if not firmware.rootfs_path or not Path(firmware.rootfs_path).exists():
             raise EmulationError("Firmware rootfs not found")
+
+        # Auto-detect DVRF mode if not explicitly set
+        from .dvrf_emulator import DVRFEmulator, detect_dvrf_firmware
+
+        if not dvrf_mode and detect_dvrf_firmware(firmware):
+            logger.info("Detected DVRF-like firmware, enabling DVRF optimizations")
+            dvrf_mode = True
+
+        # Apply DVRF-specific preparation if needed
+        prepared_rootfs = firmware.rootfs_path
+        if dvrf_mode:
+            logger.info("Applying DVRF emulation patches...")
+            dvrf_emulator = DVRFEmulator(self.config)
+            # Generate instance ID early for DVRF prep
+            temp_state = EmulationState(firmware_id=firmware.id)
+            prepared_rootfs = dvrf_emulator.prepare_firmware(
+                firmware, temp_state.id
+            )
+            # Update firmware info with prepared rootfs
+            firmware.rootfs_path = str(prepared_rootfs)
+            logger.info(f"DVRF preparation complete: {prepared_rootfs}")
 
         # Get architecture profile
         profile = self.PROFILES.get(firmware.architecture)
