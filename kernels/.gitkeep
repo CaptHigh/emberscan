@@ -1,0 +1,9 @@
+# Kernels directory
+# Pre-built Linux kernels for QEMU emulation are stored here.
+#
+# Required kernels:
+# - vmlinux.mipsel  (MIPS Little Endian, for routers like Linksys E1550)
+# - vmlinux.mipseb  (MIPS Big Endian)
+# - zImage.armel    (ARM)
+#
+# Run `emberscan download-kernels` or the setup script to download these.
