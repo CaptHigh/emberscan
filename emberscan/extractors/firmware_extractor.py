@@ -130,7 +130,7 @@ class FirmwareExtractor:
 
         # Detect architecture from ELF binaries
         elf_pos = data.find(b"\x7fELF")
-        if elf_pos != -1:
+        if elf_pos != -1 and len(data) - elf_pos >= 52:
             arch_info = self._parse_elf_header(data[elf_pos : elf_pos + 52])
             if arch_info:
                 result["architecture"] = arch_info["architecture"]
@@ -140,6 +140,13 @@ class FirmwareExtractor:
         binwalk_results = self._run_binwalk_analysis(firmware_path)
         if binwalk_results:
             result["binwalk"] = binwalk_results
+            # Extract filesystem info from binwalk if not already detected
+            if result["filesystem_type"] == FilesystemType.UNKNOWN:
+                fs_info = self._parse_filesystem_from_binwalk(binwalk_results)
+                if fs_info:
+                    result["filesystem_type"] = fs_info["filesystem_type"]
+                    if fs_info["endianness"] != Endianness.UNKNOWN:
+                        result["endianness"] = fs_info["endianness"]
 
         # Entropy analysis
         result["entropy"] = self._analyze_entropy(data)
@@ -226,8 +233,18 @@ class FirmwareExtractor:
             result = subprocess.run(
                 ["strings", "-n", "8", firmware_path], capture_output=True, text=True, timeout=60
             )
+            if result.returncode != 0:
+                logger.warning(f"Strings command failed with return code {result.returncode}")
+                return metadata
             strings_output = result.stdout
-        except:
+        except subprocess.TimeoutExpired:
+            logger.warning("Strings extraction timed out")
+            return metadata
+        except FileNotFoundError:
+            logger.warning("Strings command not found - install binutils")
+            return metadata
+        except Exception as e:
+            logger.error(f"Strings extraction failed: {e}")
             return metadata
 
         # Vendor detection patterns
@@ -302,11 +319,18 @@ class FirmwareExtractor:
         """Use binwalk to extract firmware."""
         try:
             # Run binwalk extraction
-            subprocess.run(
+            result = subprocess.run(
                 ["binwalk", "-e", "-C", str(output_dir), firmware_path],
                 capture_output=True,
+                text=True,
                 timeout=300,
             )
+
+            if result.returncode != 0:
+                logger.warning(f"Binwalk extraction failed with return code {result.returncode}")
+                if result.stderr:
+                    logger.debug(f"Binwalk error: {result.stderr}")
+                return None
 
             # Common rootfs directory patterns created by binwalk
             rootfs_patterns = [
@@ -461,6 +485,13 @@ class FirmwareExtractor:
                 ["binwalk", firmware_path], capture_output=True, text=True, timeout=120
             )
 
+            # Check if binwalk succeeded
+            if result.returncode != 0:
+                logger.warning(f"Binwalk analysis failed with return code {result.returncode}")
+                if result.stderr:
+                    logger.debug(f"Binwalk error: {result.stderr}")
+                return None
+
             components = []
             for line in result.stdout.split("\n"):
                 parts = line.split()
@@ -473,10 +504,66 @@ class FirmwareExtractor:
                         }
                     )
 
-            return components
+            return components if components else None
 
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except subprocess.TimeoutExpired:
+            logger.warning("Binwalk analysis timed out")
             return None
+        except FileNotFoundError:
+            logger.warning("Binwalk not found - install binwalk for enhanced analysis")
+            return None
+        except Exception as e:
+            logger.error(f"Binwalk analysis failed: {e}")
+            return None
+
+    def _parse_filesystem_from_binwalk(self, binwalk_results: List[Dict]) -> Optional[Dict]:
+        """Parse filesystem type and endianness from binwalk results."""
+        result = {
+            "filesystem_type": FilesystemType.UNKNOWN,
+            "endianness": Endianness.UNKNOWN,
+        }
+
+        for component in binwalk_results:
+            desc = component.get("description", "").lower()
+
+            # SquashFS detection
+            if "squashfs" in desc:
+                result["filesystem_type"] = FilesystemType.SQUASHFS
+                if "little endian" in desc:
+                    result["endianness"] = Endianness.LITTLE
+                elif "big endian" in desc:
+                    result["endianness"] = Endianness.BIG
+                return result
+
+            # JFFS2 detection
+            elif "jffs2" in desc:
+                result["filesystem_type"] = FilesystemType.JFFS2
+                if "little endian" in desc:
+                    result["endianness"] = Endianness.LITTLE
+                elif "big endian" in desc:
+                    result["endianness"] = Endianness.BIG
+                return result
+
+            # CramFS detection
+            elif "cramfs" in desc:
+                result["filesystem_type"] = FilesystemType.CRAMFS
+                if "little endian" in desc:
+                    result["endianness"] = Endianness.LITTLE
+                elif "big endian" in desc:
+                    result["endianness"] = Endianness.BIG
+                return result
+
+            # UBIFS detection
+            elif "ubifs" in desc or "ubi " in desc:
+                result["filesystem_type"] = FilesystemType.UBIFS
+                return result
+
+            # RomFS detection
+            elif "romfs" in desc:
+                result["filesystem_type"] = FilesystemType.ROMFS
+                return result
+
+        return None if result["filesystem_type"] == FilesystemType.UNKNOWN else result
 
     def _parse_elf_header(self, data: bytes) -> Optional[Dict]:
         """Parse ELF header to determine architecture."""
@@ -516,6 +603,72 @@ class FirmwareExtractor:
             "endianness": endian,
             "bits": 64 if elf_class == 2 else 32,
         }
+
+    def analyze_extracted_rootfs(self, rootfs_path: Path) -> Dict[str, Any]:
+        """
+        Analyze extracted rootfs to determine architecture and endianness.
+
+        This should be called after extraction to get accurate metadata.
+        Returns dict with architecture and endianness.
+        """
+        logger.info(f"Analyzing extracted rootfs: {rootfs_path}")
+
+        result = {
+            "architecture": Architecture.UNKNOWN,
+            "endianness": Endianness.UNKNOWN,
+        }
+
+        if not rootfs_path.exists():
+            logger.warning(f"Rootfs path does not exist: {rootfs_path}")
+            return result
+
+        # Search for ELF binaries in common directories
+        search_dirs = ["bin", "sbin", "usr/bin", "usr/sbin", "lib"]
+        elf_files_checked = 0
+
+        for search_dir in search_dirs:
+            search_path = rootfs_path / search_dir
+            if not search_path.exists():
+                continue
+
+            try:
+                for item in search_path.iterdir():
+                    if not item.is_file():
+                        continue
+
+                    # Limit number of files checked for performance
+                    if elf_files_checked >= 10:
+                        break
+
+                    try:
+                        with open(item, "rb") as f:
+                            header = f.read(52)
+
+                        if len(header) >= 52 and header[:4] == b"\x7fELF":
+                            elf_files_checked += 1
+                            arch_info = self._parse_elf_header(header)
+                            if arch_info and arch_info["architecture"] != Architecture.UNKNOWN:
+                                result["architecture"] = arch_info["architecture"]
+                                result["endianness"] = arch_info["endianness"]
+                                logger.info(
+                                    f"Detected from {item.name}: "
+                                    f"{arch_info['architecture'].value}, "
+                                    f"{arch_info['endianness'].value}"
+                                )
+                                return result
+                    except (OSError, PermissionError) as e:
+                        logger.debug(f"Could not read {item}: {e}")
+                        continue
+            except (OSError, PermissionError) as e:
+                logger.debug(f"Could not access directory {search_path}: {e}")
+                continue
+
+        if elf_files_checked == 0:
+            logger.warning("No ELF binaries found in extracted rootfs")
+        else:
+            logger.warning(f"Checked {elf_files_checked} ELF files but could not determine architecture")
+
+        return result
 
     def _analyze_entropy(self, data: bytes, block_size: int = 1024) -> Dict:
         """Analyze entropy of firmware data."""

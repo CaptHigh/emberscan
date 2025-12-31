@@ -154,7 +154,7 @@ class BinaryScanner(BaseScanner):
             with open(path, "rb") as f:
                 magic = f.read(4)
                 return magic == b"\x7fELF"
-        except:
+        except (OSError, PermissionError, IOError):
             return False
 
     def _check_suid_binaries(self, rootfs: Path) -> List[Vulnerability]:
@@ -230,7 +230,8 @@ class BinaryScanner(BaseScanner):
                     )
                     vulnerabilities.append(vuln)
 
-            except:
+            except (OSError, PermissionError) as e:
+                logger.debug(f"Could not check {item}: {e}")
                 continue
 
         return vulnerabilities
@@ -306,11 +307,16 @@ class BinaryScanner(BaseScanner):
                 ["strings", str(binary)], capture_output=True, text=True, timeout=30
             )
 
-            for func_name in DANGEROUS_FUNCTIONS.keys():
-                if func_name in result.stdout:
-                    symbols.append(func_name)
+            if result.returncode == 0:
+                for func_name in DANGEROUS_FUNCTIONS.keys():
+                    if func_name in result.stdout:
+                        symbols.append(func_name)
 
-        except:
+        except FileNotFoundError:
+            pass
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
             pass
 
         return symbols
@@ -386,7 +392,8 @@ class BinaryScanner(BaseScanner):
 
         except FileNotFoundError:
             pass
-        except:
+        except (subprocess.TimeoutExpired, ValueError, KeyError) as e:
+            logger.debug(f"Checksec parsing failed: {e}")
             pass
 
         # Manual check with readelf
@@ -411,7 +418,7 @@ class BinaryScanner(BaseScanner):
             if "DYN (Shared object file)" in result2.stdout:
                 info["pie"] = True
 
-        except:
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
         return info
@@ -450,7 +457,8 @@ class BinaryScanner(BaseScanner):
                             vulnerabilities.append(vuln)
                             break
 
-                except:
+                except (OSError, PermissionError, UnicodeDecodeError) as e:
+                    logger.debug(f"Could not read {item}: {e}")
                     continue
 
             # Check binaries with strings
@@ -476,7 +484,8 @@ class BinaryScanner(BaseScanner):
                             vulnerabilities.append(vuln)
                             break
 
-                except:
+                except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+                    logger.debug(f"Could not analyze binary {item}: {e}")
                     continue
 
         return vulnerabilities
@@ -533,7 +542,7 @@ class BinaryScanner(BaseScanner):
                 if match:
                     return match.group(1)
 
-        except:
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
 
         return None
