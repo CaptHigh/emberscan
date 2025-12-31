@@ -300,6 +300,38 @@ class EmberScanner:
 
         firmware.rootfs_path = str(rootfs_path)
 
+        # Detect filesystem type from extraction path if still unknown
+        if firmware.filesystem_type == FilesystemType.UNKNOWN:
+            rootfs_str = str(rootfs_path).lower()
+            if "squashfs" in rootfs_str:
+                firmware.filesystem_type = FilesystemType.SQUASHFS
+                logger.info("Updated filesystem type from path: squashfs")
+            elif "cramfs" in rootfs_str:
+                firmware.filesystem_type = FilesystemType.CRAMFS
+                logger.info("Updated filesystem type from path: cramfs")
+            elif "jffs2" in rootfs_str:
+                firmware.filesystem_type = FilesystemType.JFFS2
+                logger.info("Updated filesystem type from path: jffs2")
+            elif "ubifs" in rootfs_str:
+                firmware.filesystem_type = FilesystemType.UBIFS
+                logger.info("Updated filesystem type from path: ubifs")
+            elif "romfs" in rootfs_str:
+                firmware.filesystem_type = FilesystemType.ROMFS
+                logger.info("Updated filesystem type from path: romfs")
+
+        # Re-analyze to detect architecture/endianness from extracted binaries
+        if firmware.architecture == Architecture.UNKNOWN or firmware.endianness == Endianness.UNKNOWN:
+            logger.info("Re-analyzing firmware from extracted rootfs")
+            rootfs_analysis = self.extractor.analyze_extracted_rootfs(rootfs_path)
+
+            if rootfs_analysis["architecture"] != Architecture.UNKNOWN:
+                firmware.architecture = rootfs_analysis["architecture"]
+                logger.info(f"Updated architecture from rootfs: {firmware.architecture.value}")
+
+            if rootfs_analysis["endianness"] != Endianness.UNKNOWN:
+                firmware.endianness = rootfs_analysis["endianness"]
+                logger.info(f"Updated endianness from rootfs: {firmware.endianness.value}")
+
         logger.info(f"Extracted to: {rootfs_path}")
         return rootfs_path
 
