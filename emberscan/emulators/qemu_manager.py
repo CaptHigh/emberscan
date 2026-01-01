@@ -42,6 +42,8 @@ class QEMUProfile:
     kernel_name: str
     console: str
     nic_model: str = "e1000"
+    disk_if: str = "ide"  # Disk interface: ide, virtio, scsi
+    root_dev: str = "/dev/hda"  # Root device name in guest
     extra_args: List[str] = None
 
 
@@ -62,16 +64,20 @@ class QEMUManager:
         Architecture.MIPS_LE: QEMUProfile(
             binary="qemu-system-mipsel",
             machine="malta",
-            cpu="MIPS32R2-generic",
+            cpu="24Kc",
             kernel_name="vmlinux.mipsel",
             console="ttyS0",
+            disk_if="ide",
+            root_dev="/dev/sda",
         ),
         Architecture.MIPS_BE: QEMUProfile(
             binary="qemu-system-mips",
             machine="malta",
-            cpu="MIPS32R2-generic",
+            cpu="24Kc",
             kernel_name="vmlinux.mipseb",
             console="ttyS0",
+            disk_if="ide",
+            root_dev="/dev/sda",
         ),
         Architecture.ARM: QEMUProfile(
             binary="qemu-system-arm",
@@ -80,6 +86,8 @@ class QEMUManager:
             kernel_name="zImage.armel",
             console="ttyAMA0",
             nic_model="virtio-net-device",
+            disk_if="virtio",
+            root_dev="/dev/vda",
         ),
         Architecture.ARM64: QEMUProfile(
             binary="qemu-system-aarch64",
@@ -88,6 +96,8 @@ class QEMUManager:
             kernel_name="Image.aarch64",
             console="ttyAMA0",
             nic_model="virtio-net-device",
+            disk_if="virtio",
+            root_dev="/dev/vda",
         ),
         Architecture.X86: QEMUProfile(
             binary="qemu-system-i386",
@@ -95,6 +105,8 @@ class QEMUManager:
             cpu="qemu32",
             kernel_name="bzImage.x86",
             console="ttyS0",
+            disk_if="ide",
+            root_dev="/dev/hda",
         ),
         Architecture.X86_64: QEMUProfile(
             binary="qemu-system-x86_64",
@@ -102,6 +114,8 @@ class QEMUManager:
             cpu="qemu64",
             kernel_name="bzImage.x86_64",
             console="ttyS0",
+            disk_if="ide",
+            root_dev="/dev/hda",
         ),
     }
 
@@ -187,10 +201,10 @@ class QEMUManager:
         logger.debug(f"QEMU command: {state.qemu_command}")
 
         # Start QEMU process
-        # For console mode, don't capture output so user can interact
+        # For interactive modes (console, gtk, sdl), don't capture stdio
         try:
-            if display_mode == "console":
-                # Interactive console - inherit stdio
+            if display_mode in ("console", "gtk", "sdl"):
+                # Interactive modes - need access to stdio for serial console
                 process = subprocess.Popen(
                     qemu_cmd,
                     stdin=None,
@@ -198,6 +212,7 @@ class QEMUManager:
                     stderr=None,
                 )
             else:
+                # Headless modes - can capture output for debugging
                 process = subprocess.Popen(
                     qemu_cmd,
                     stdout=subprocess.PIPE,
@@ -256,50 +271,136 @@ class QEMUManager:
         logger.info(f"Waiting for boot (timeout: {timeout}s)")
 
         start_time = time.time()
+        last_check_time = start_time
+        boot_detected = False
+        service_found = False
 
         while time.time() - start_time < timeout:
             # Check if QEMU is still running
             process = self._instances.get(state.id)
             if not process or process.poll() is not None:
-                # Try to capture error output
-                error_msg = "Unknown error"
-                if process:
-                    try:
-                        _, stderr = process.communicate(timeout=1)
-                        if stderr:
-                            error_msg = stderr.decode("utf-8", errors="ignore").strip()
-                            # Get last few lines of error
-                            error_lines = error_msg.split("\n")[-5:]
-                            error_msg = "\n".join(error_lines)
-                    except Exception:
-                        pass
+                elapsed = time.time() - start_time
 
-                    exit_code = process.returncode
-                    logger.error(f"QEMU process terminated unexpectedly (exit code: {exit_code})")
-                    if error_msg and error_msg != "Unknown error":
-                        logger.error(f"QEMU error output:\n{error_msg}")
+                # If process ended very early (< 10s), it's likely a boot error
+                # If it ran longer, user might have closed the window or services already started
+                if elapsed < 10:
+                    # Try to capture error output (only works if stderr was captured)
+                    error_msg = None
+                    exit_code = None
+
+                    if process:
+                        exit_code = process.returncode
+
+                        # Only try to read stderr if it was captured (non-interactive mode)
+                        if process.stderr:
+                            try:
+                                _, stderr = process.communicate(timeout=1)
+                                if stderr:
+                                    error_msg = stderr.decode("utf-8", errors="ignore").strip()
+                                    # Get last few lines of error
+                                    error_lines = error_msg.split("\n")[-10:]
+                                    error_msg = "\n".join(error_lines)
+                            except Exception:
+                                pass
+
+                        # Exit code 0 means normal shutdown - might be user closing window
+                        if exit_code == 0:
+                            logger.warning(f"QEMU exited normally after {elapsed:.1f}s")
+                            logger.warning("This might mean:")
+                            logger.warning("  - User closed the display window")
+                            logger.warning("  - Firmware completed boot and shutdown")
+                            # Don't treat as error, just return with current state
+                            return boot_detected
+                        else:
+                            logger.error(f"QEMU process crashed early (exit code: {exit_code}) after {elapsed:.1f}s")
+                            if error_msg:
+                                logger.error(f"QEMU error output:\n{error_msg}")
+                                # Check for common boot errors
+                                if "Kernel panic" in error_msg:
+                                    logger.error("→ Kernel panic detected - wrong architecture or incompatible firmware")
+                                elif "VFS: Cannot open root device" in error_msg:
+                                    logger.error("→ Root device error - disk configuration issue")
+                                elif "unable to find CPU model" in error_msg:
+                                    logger.error("→ Invalid CPU model for this architecture")
+                            else:
+                                logger.error("Unable to capture error output (interactive mode)")
+                                logger.error("Try running with --display none to capture detailed errors")
+                    else:
+                        logger.error("QEMU process terminated unexpectedly")
+                    return False
                 else:
-                    logger.error("QEMU process terminated unexpectedly")
-                return False
+                    # Process ended after running for a while
+                    logger.info(f"QEMU process ended after {elapsed:.1f}s")
+                    if boot_detected:
+                        logger.info("Services were detected - boot was successful")
+                        return True
+                    else:
+                        logger.warning("No services detected before QEMU ended")
+                        return False
 
-            # Check HTTP port
-            if self._check_port(state.ip_address, state.http_port):
-                state.boot_successful = True
-                state.boot_time = time.time() - start_time
-                state.services_detected.append("http")
-                logger.info(f"HTTP service detected after {state.boot_time:.1f}s")
+            current_time = time.time()
+            elapsed = current_time - start_time
 
-                # Check other services
-                if self._check_port(state.ip_address, state.ssh_port):
-                    state.services_detected.append("ssh")
-                if self._check_port(state.ip_address, state.telnet_port):
-                    state.services_detected.append("telnet")
+            # Check for actual service responses (not just open ports)
+            # Only check every check_interval seconds to avoid spam
+            if current_time - last_check_time >= check_interval:
+                last_check_time = current_time
 
-                return True
+                # Try HTTP first (most common web interface)
+                if self._check_http_service(state.ip_address, state.http_port):
+                    if not service_found:
+                        state.boot_successful = True
+                        state.boot_time = elapsed
+                        state.services_detected.append("http")
+                        logger.info(f"✓ HTTP service responding after {state.boot_time:.1f}s")
+                        service_found = True
+                        boot_detected = True
 
-            time.sleep(check_interval)
+                # Check SSH
+                if self._check_ssh_service(state.ip_address, state.ssh_port):
+                    if "ssh" not in state.services_detected:
+                        state.services_detected.append("ssh")
+                        logger.info(f"✓ SSH service responding after {elapsed:.1f}s")
+                        if not boot_detected:
+                            state.boot_successful = True
+                            state.boot_time = elapsed
+                            boot_detected = True
+                            service_found = True
 
+                # Check Telnet
+                if self._check_telnet_service(state.ip_address, state.telnet_port):
+                    if "telnet" not in state.services_detected:
+                        state.services_detected.append("telnet")
+                        logger.info(f"✓ Telnet service responding after {elapsed:.1f}s")
+                        if not boot_detected:
+                            state.boot_successful = True
+                            state.boot_time = elapsed
+                            boot_detected = True
+                            service_found = True
+
+                # If we found any responding service, consider boot successful
+                if boot_detected:
+                    return True
+
+                # Log progress every 30 seconds
+                if int(elapsed) % 30 == 0 and elapsed > 0:
+                    logger.info(f"Still waiting for services... ({int(elapsed)}s elapsed)")
+
+            time.sleep(1)  # Check more frequently but only run service checks every check_interval
+
+        # Timeout reached
         logger.warning(f"Boot timeout after {timeout}s")
+
+        # Check if QEMU is still running
+        process = self._instances.get(state.id)
+        if process and process.poll() is None:
+            logger.warning("QEMU is still running but no services responded")
+            logger.warning("This usually means:")
+            logger.warning("  - Wrong architecture specified (firmware can't execute)")
+            logger.warning("  - Network not configured in firmware")
+            logger.warning("  - Services failed to start (check with --display console)")
+            logger.warning("  - Firmware waiting for user interaction")
+
         return False
 
     def get_console_output(self, state: EmulationState, lines: int = 100) -> str:
@@ -383,8 +484,19 @@ class QEMUManager:
             check=True,
         )
 
-        # Create filesystem
-        subprocess.run(["mkfs.ext4", "-F", str(image_path)], capture_output=True, check=True)
+        # Create filesystem - use ext2 with minimal features for old kernel compatibility
+        # Disable 64bit, metadata_csum, and other modern features
+        subprocess.run(
+            [
+                "mkfs.ext2",
+                "-F",
+                "-O", "^64bit,^metadata_csum,^dir_index",
+                "-I", "128",  # Small inode size for compatibility
+                str(image_path)
+            ],
+            capture_output=True,
+            check=True,
+        )
 
         # Mount and copy files
         mount_point = instance_dir / "mnt"
@@ -422,12 +534,64 @@ class QEMUManager:
 
     def _patch_rootfs_for_emulation(self, rootfs: Path):
         """Apply patches to rootfs for better emulation compatibility."""
-        # Add serial console to inittab
+        # Create /dev if it doesn't exist
+        dev_dir = rootfs / "dev"
+        subprocess.run(
+            ["sudo", "mkdir", "-p", str(dev_dir)],
+            capture_output=True,
+        )
+
+        # Create fake /dev/nvram as a regular file (firmware will fail to ioctl but won't crash)
+        nvram_dev = dev_dir / "nvram"
+        if not nvram_dev.exists():
+            subprocess.run(
+                ["sudo", "mknod", str(nvram_dev), "c", "10", "144"],
+                capture_output=True,
+            )
+
+        # Create other common device nodes
+        for dev_name, dev_type, major, minor in [
+            ("console", "c", "5", "1"),
+            ("null", "c", "1", "3"),
+            ("zero", "c", "1", "5"),
+            ("random", "c", "1", "8"),
+            ("urandom", "c", "1", "9"),
+        ]:
+            dev_path = dev_dir / dev_name
+            if not dev_path.exists():
+                subprocess.run(
+                    ["sudo", "mknod", str(dev_path), dev_type, major, minor],
+                    capture_output=True,
+                )
+
+        # Add serial console to inittab for interactive access
         inittab = rootfs / "etc" / "inittab"
-        if inittab.exists():
-            with open(inittab, "a") as f:
-                f.write("\n# EmberScan emulation\n")
-                f.write("::respawn:/sbin/getty -L ttyS0 115200 vt100\n")
+        # Check if inittab exists
+        result = subprocess.run(
+            ["sudo", "test", "-f", str(inittab)],
+            capture_output=True,
+        )
+
+        if result.returncode == 0:  # File exists
+            # Check if ttyS0 entry already exists to avoid duplicates
+            result = subprocess.run(
+                ["sudo", "grep", "-q", "ttyS0", str(inittab)],
+                capture_output=True,
+            )
+            has_ttys0 = (result.returncode == 0)
+
+            if not has_ttys0:
+                # BusyBox init format: <id>::<action>:<process>
+                # Append getty line to inittab
+                subprocess.run(
+                    ["sudo", "sh", "-c",
+                     f"echo '' >> '{inittab}' && "
+                     f"echo '# EmberScan emulation - serial console' >> '{inittab}' && "
+                     f"echo 'ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100' >> '{inittab}' && "
+                     f"echo '# Fallback if /sbin/getty doesn\\'t exist' >> '{inittab}' && "
+                     f"echo 'ttyS1::respawn:/bin/sh' >> '{inittab}'"],
+                    capture_output=True,
+                )
 
         # Disable hardware-specific scripts
         init_d = rootfs / "etc" / "init.d"
@@ -435,11 +599,66 @@ class QEMUManager:
             hw_scripts = ["gpio", "led", "button", "switch", "watchdog"]
             for script in init_d.iterdir():
                 if any(hw in script.name.lower() for hw in hw_scripts):
-                    script.rename(script.with_suffix(".disabled"))
+                    try:
+                        script.rename(script.with_suffix(".disabled"))
+                    except (PermissionError, FileNotFoundError):
+                        pass
+
+        # Configure network for emulation
+        # Create a simple network startup script for firmwares that don't auto-configure
+        init_d = rootfs / "etc" / "init.d"
+
+        # Ensure init.d directory exists
+        subprocess.run(
+            ["sudo", "mkdir", "-p", str(init_d)],
+            capture_output=True,
+        )
+
+        network_script = init_d / "S40network_emulation"
+        network_content = """#!/bin/sh
+# EmberScan network configuration for emulation
+# This ensures eth0 is up with a basic configuration
+
+case "$1" in
+    start)
+        echo "Configuring network for emulation..."
+        # Bring up loopback
+        ifconfig lo 127.0.0.1 up 2>/dev/null
+        # Configure eth0 with DHCP or static IP
+        ifconfig eth0 up 2>/dev/null
+        # Try DHCP first (QEMU user networking provides DHCP)
+        udhcpc -i eth0 -n -q 2>/dev/null || {
+            # Fallback to static IP if DHCP fails
+            ifconfig eth0 192.168.1.1 netmask 255.255.255.0 up 2>/dev/null
+        }
+        ;;
+    stop)
+        ifconfig eth0 down 2>/dev/null
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac
+"""
+        # Always use sudo to write to mounted filesystem
+        subprocess.run(
+            ["sudo", "sh", "-c", f"cat > '{network_script}' << 'EOFNET'\n{network_content}EOFNET"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["sudo", "chmod", "755", str(network_script)],
+            capture_output=True,
+            check=True,
+        )
 
         # Create emulation marker
         marker = rootfs / "etc" / "emberscan_emulated"
-        marker.write_text("EmberScan QEMU Emulation\n")
+        subprocess.run(
+            ["sudo", "sh", "-c", f"echo 'EmberScan QEMU Emulation' > '{marker}'"],
+            capture_output=True,
+        )
 
     def _build_qemu_command(
         self,
@@ -460,24 +679,26 @@ class QEMUManager:
             "-kernel",
             str(kernel_path),
             "-drive",
-            f"file={rootfs_image},format=raw,if=virtio",
+            f"file={rootfs_image},format=raw,if={profile.disk_if}",
             "-append",
-            f"root=/dev/vda console={profile.console} rw",
+            f"root={profile.root_dev} console={profile.console} rw",
         ]
 
         # Display mode configuration
         if display_mode == "none":
-            # Headless mode - no display
-            cmd.append("-nographic")
+            # Headless mode - no display, serial to null
+            cmd.extend(["-nographic", "-serial", "null"])
         elif display_mode == "gtk":
-            # GTK GUI window
-            cmd.extend(["-display", "gtk"])
+            # GTK GUI window with serial console multiplexed to stdio
+            # This allows both GTK window AND interactive terminal access
+            # User can interact via terminal while seeing GUI output
+            cmd.extend(["-display", "gtk", "-serial", "mon:stdio"])
         elif display_mode == "sdl":
-            # SDL GUI window
-            cmd.extend(["-display", "sdl"])
+            # SDL GUI window with serial console multiplexed to stdio
+            cmd.extend(["-display", "sdl", "-serial", "mon:stdio"])
         elif display_mode == "curses":
-            # Text-mode display in terminal
-            cmd.extend(["-display", "curses"])
+            # Text-mode display in terminal - uses ncurses UI
+            cmd.extend(["-display", "curses", "-serial", "stdio"])
         elif display_mode == "console":
             # Serial console to terminal - shows boot messages and allows interaction
             cmd.extend(["-serial", "mon:stdio", "-nographic"])
@@ -499,7 +720,7 @@ class QEMUManager:
 
         # Debug server
         if enable_debug:
-            cmd.extend(["-s", "-S"])  # GDB server on 1234, wait for connection
+            cmd.extend(["-s"])  # GDB server on 1234 (port can be connected anytime)
 
         # Snapshot mode (if supported)
         if self.config.qemu.snapshot:
@@ -515,6 +736,55 @@ class QEMUManager:
             result = sock.connect_ex((host, port))
             sock.close()
             return result == 0
+        except:
+            return False
+
+    def _check_http_service(self, host: str, port: int, timeout: float = 5.0) -> bool:
+        """Check if HTTP service is actually responding (not just port open)."""
+        import urllib.request
+        import urllib.error
+
+        try:
+            # Try to get HTTP response
+            url = f"http://{host}:{port}/"
+            req = urllib.request.Request(url, method='GET')
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                # Any HTTP response (even 404) means the server is working
+                return response.status < 600
+        except urllib.error.HTTPError as e:
+            # HTTP errors (404, 500, etc.) still mean the server is responding
+            return e.code < 600
+        except (urllib.error.URLError, TimeoutError, ConnectionRefusedError, OSError):
+            # Connection failed - server not responding
+            return False
+        except Exception:
+            return False
+
+    def _check_ssh_service(self, host: str, port: int, timeout: float = 5.0) -> bool:
+        """Check if SSH service is actually responding with SSH banner."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+            # SSH server sends banner immediately
+            banner = sock.recv(256).decode('utf-8', errors='ignore')
+            sock.close()
+            # Check for SSH banner
+            return banner.startswith('SSH-')
+        except:
+            return False
+
+    def _check_telnet_service(self, host: str, port: int, timeout: float = 5.0) -> bool:
+        """Check if Telnet service is actually responding."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+            # Telnet server typically sends IAC (0xff) commands or login prompt
+            data = sock.recv(256)
+            sock.close()
+            # If we got any data, telnet is responding
+            return len(data) > 0
         except:
             return False
 

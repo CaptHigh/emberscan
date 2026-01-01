@@ -153,7 +153,7 @@ Examples:
     )
     emulate_parser.add_argument("--memory", type=int, default=256, help="RAM in MB (default: 256)")
     emulate_parser.add_argument(
-        "--debug", action="store_true", help="Enable GDB debugging (port 1234)"
+        "--debug", action="store_true", help="Enable GDB server on port 1234 (firmware runs immediately, attach with 'target remote localhost:1234')"
     )
     emulate_parser.add_argument(
         "--display",
@@ -556,6 +556,17 @@ def cmd_emulate(args, config: Config):
         print(
             f"\n{Colors.CYAN}[*] Using specified architecture: {firmware.architecture.value}{Colors.END}"
         )
+
+        # Warn if specified arch conflicts with auto-detection
+        extractor = FirmwareExtractor(config)
+        auto_detected = extractor.analyze(str(firmware_path))
+        if auto_detected["architecture"] != Architecture.UNKNOWN and \
+           auto_detected["architecture"] != firmware.architecture:
+            print(
+                f"{Colors.WARNING}⚠ Warning: Auto-detection found {auto_detected['architecture'].value}, "
+                f"but you specified {firmware.architecture.value}{Colors.END}"
+            )
+            print(f"{Colors.WARNING}   Emulation may fail due to architecture mismatch!{Colors.END}")
     else:
         # Auto-detect from firmware/extracted files
         print(f"\n{Colors.CYAN}[*] Auto-detecting architecture...{Colors.END}")
