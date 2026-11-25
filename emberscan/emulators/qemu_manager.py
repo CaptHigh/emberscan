@@ -312,19 +312,25 @@ class QEMUManager:
                             # Don't treat as error, just return with current state
                             return boot_detected
                         else:
-                            logger.error(f"QEMU process crashed early (exit code: {exit_code}) after {elapsed:.1f}s")
+                            logger.error(
+                                f"QEMU process crashed early (exit code: {exit_code}) after {elapsed:.1f}s"
+                            )
                             if error_msg:
                                 logger.error(f"QEMU error output:\n{error_msg}")
                                 # Check for common boot errors
                                 if "Kernel panic" in error_msg:
-                                    logger.error("→ Kernel panic detected - wrong architecture or incompatible firmware")
+                                    logger.error(
+                                        "→ Kernel panic detected - wrong architecture or incompatible firmware"
+                                    )
                                 elif "VFS: Cannot open root device" in error_msg:
                                     logger.error("→ Root device error - disk configuration issue")
                                 elif "unable to find CPU model" in error_msg:
                                     logger.error("→ Invalid CPU model for this architecture")
                             else:
                                 logger.error("Unable to capture error output (interactive mode)")
-                                logger.error("Try running with --display none to capture detailed errors")
+                                logger.error(
+                                    "Try running with --display none to capture detailed errors"
+                                )
                     else:
                         logger.error("QEMU process terminated unexpectedly")
                     return False
@@ -490,9 +496,11 @@ class QEMUManager:
             [
                 "mkfs.ext2",
                 "-F",
-                "-O", "^64bit,^metadata_csum,^dir_index",
-                "-I", "128",  # Small inode size for compatibility
-                str(image_path)
+                "-O",
+                "^64bit,^metadata_csum,^dir_index",
+                "-I",
+                "128",  # Small inode size for compatibility
+                str(image_path),
             ],
             capture_output=True,
             check=True,
@@ -578,18 +586,22 @@ class QEMUManager:
                 ["sudo", "grep", "-q", "ttyS0", str(inittab)],
                 capture_output=True,
             )
-            has_ttys0 = (result.returncode == 0)
+            has_ttys0 = result.returncode == 0
 
             if not has_ttys0:
                 # BusyBox init format: <id>::<action>:<process>
                 # Append getty line to inittab
                 subprocess.run(
-                    ["sudo", "sh", "-c",
-                     f"echo '' >> '{inittab}' && "
-                     f"echo '# EmberScan emulation - serial console' >> '{inittab}' && "
-                     f"echo 'ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100' >> '{inittab}' && "
-                     f"echo '# Fallback if /sbin/getty doesn\\'t exist' >> '{inittab}' && "
-                     f"echo 'ttyS1::respawn:/bin/sh' >> '{inittab}'"],
+                    [
+                        "sudo",
+                        "sh",
+                        "-c",
+                        f"echo '' >> '{inittab}' && "
+                        f"echo '# EmberScan emulation - serial console' >> '{inittab}' && "
+                        f"echo 'ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100' >> '{inittab}' && "
+                        f"echo '# Fallback if /sbin/getty doesn\\'t exist' >> '{inittab}' && "
+                        f"echo 'ttyS1::respawn:/bin/sh' >> '{inittab}'",
+                    ],
                     capture_output=True,
                 )
 
@@ -741,13 +753,13 @@ esac
 
     def _check_http_service(self, host: str, port: int, timeout: float = 5.0) -> bool:
         """Check if HTTP service is actually responding (not just port open)."""
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         try:
             # Try to get HTTP response
             url = f"http://{host}:{port}/"
-            req = urllib.request.Request(url, method='GET')
+            req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 # Any HTTP response (even 404) means the server is working
                 return response.status < 600
@@ -767,10 +779,10 @@ esac
             sock.settimeout(timeout)
             sock.connect((host, port))
             # SSH server sends banner immediately
-            banner = sock.recv(256).decode('utf-8', errors='ignore')
+            banner = sock.recv(256).decode("utf-8", errors="ignore")
             sock.close()
             # Check for SSH banner
-            return banner.startswith('SSH-')
+            return banner.startswith("SSH-")
         except:
             return False
 

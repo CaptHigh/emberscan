@@ -130,23 +130,37 @@ class FirmwareExtractor:
 
         # Detect architecture from ELF binaries
         elf_pos = data.find(b"\x7fELF")
-        if elf_pos != -1 and len(data) - elf_pos >= 52:
+        if elf_pos != -1:
             arch_info = self._parse_elf_header(data[elf_pos : elf_pos + 52])
             if arch_info:
                 result["architecture"] = arch_info["architecture"]
                 result["endianness"] = arch_info["endianness"]
 
+        # If the top-level image is compressed (no raw ELF), fall back to the
+        # U-Boot uImage header's CPU field so we still report an architecture.
+        if result["architecture"] == Architecture.UNKNOWN:
+            uimage_arch = self._detect_arch_from_uimage(data)
+            if uimage_arch is not None:
+                result["architecture"] = uimage_arch
+
+        # ESP32 / ESP8266 firmware images (Espressif, Xtensa core) start with
+        # the 0xE9 image magic and carry recognisable ESP-IDF strings.
+        if result["architecture"] == Architecture.UNKNOWN and self._looks_like_esp(data):
+            result["architecture"] = Architecture.XTENSA
+            result["endianness"] = Endianness.LITTLE
+            result["components"].append(
+                {
+                    "type": "esp_image",
+                    "description": "Espressif ESP32/ESP8266 image (Xtensa)",
+                    "offset": 0,
+                    "offset_hex": "0x0",
+                }
+            )
+
         # Run binwalk for more detailed analysis
         binwalk_results = self._run_binwalk_analysis(firmware_path)
         if binwalk_results:
             result["binwalk"] = binwalk_results
-            # Extract filesystem info from binwalk if not already detected
-            if result["filesystem_type"] == FilesystemType.UNKNOWN:
-                fs_info = self._parse_filesystem_from_binwalk(binwalk_results)
-                if fs_info:
-                    result["filesystem_type"] = fs_info["filesystem_type"]
-                    if fs_info["endianness"] != Endianness.UNKNOWN:
-                        result["endianness"] = fs_info["endianness"]
 
         # Entropy analysis
         result["entropy"] = self._analyze_entropy(data)
@@ -233,18 +247,8 @@ class FirmwareExtractor:
             result = subprocess.run(
                 ["strings", "-n", "8", firmware_path], capture_output=True, text=True, timeout=60
             )
-            if result.returncode != 0:
-                logger.warning(f"Strings command failed with return code {result.returncode}")
-                return metadata
             strings_output = result.stdout
-        except subprocess.TimeoutExpired:
-            logger.warning("Strings extraction timed out")
-            return metadata
-        except FileNotFoundError:
-            logger.warning("Strings command not found - install binutils")
-            return metadata
-        except Exception as e:
-            logger.error(f"Strings extraction failed: {e}")
+        except:
             return metadata
 
         # Vendor detection patterns
@@ -319,18 +323,11 @@ class FirmwareExtractor:
         """Use binwalk to extract firmware."""
         try:
             # Run binwalk extraction
-            result = subprocess.run(
+            subprocess.run(
                 ["binwalk", "-e", "-C", str(output_dir), firmware_path],
                 capture_output=True,
-                text=True,
                 timeout=300,
             )
-
-            if result.returncode != 0:
-                logger.warning(f"Binwalk extraction failed with return code {result.returncode}")
-                if result.stderr:
-                    logger.debug(f"Binwalk error: {result.stderr}")
-                return None
 
             # Common rootfs directory patterns created by binwalk
             rootfs_patterns = [
@@ -485,13 +482,6 @@ class FirmwareExtractor:
                 ["binwalk", firmware_path], capture_output=True, text=True, timeout=120
             )
 
-            # Check if binwalk succeeded
-            if result.returncode != 0:
-                logger.warning(f"Binwalk analysis failed with return code {result.returncode}")
-                if result.stderr:
-                    logger.debug(f"Binwalk error: {result.stderr}")
-                return None
-
             components = []
             for line in result.stdout.split("\n"):
                 parts = line.split()
@@ -504,66 +494,10 @@ class FirmwareExtractor:
                         }
                     )
 
-            return components if components else None
+            return components
 
-        except subprocess.TimeoutExpired:
-            logger.warning("Binwalk analysis timed out")
+        except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
-        except FileNotFoundError:
-            logger.warning("Binwalk not found - install binwalk for enhanced analysis")
-            return None
-        except Exception as e:
-            logger.error(f"Binwalk analysis failed: {e}")
-            return None
-
-    def _parse_filesystem_from_binwalk(self, binwalk_results: List[Dict]) -> Optional[Dict]:
-        """Parse filesystem type and endianness from binwalk results."""
-        result = {
-            "filesystem_type": FilesystemType.UNKNOWN,
-            "endianness": Endianness.UNKNOWN,
-        }
-
-        for component in binwalk_results:
-            desc = component.get("description", "").lower()
-
-            # SquashFS detection
-            if "squashfs" in desc:
-                result["filesystem_type"] = FilesystemType.SQUASHFS
-                if "little endian" in desc:
-                    result["endianness"] = Endianness.LITTLE
-                elif "big endian" in desc:
-                    result["endianness"] = Endianness.BIG
-                return result
-
-            # JFFS2 detection
-            elif "jffs2" in desc:
-                result["filesystem_type"] = FilesystemType.JFFS2
-                if "little endian" in desc:
-                    result["endianness"] = Endianness.LITTLE
-                elif "big endian" in desc:
-                    result["endianness"] = Endianness.BIG
-                return result
-
-            # CramFS detection
-            elif "cramfs" in desc:
-                result["filesystem_type"] = FilesystemType.CRAMFS
-                if "little endian" in desc:
-                    result["endianness"] = Endianness.LITTLE
-                elif "big endian" in desc:
-                    result["endianness"] = Endianness.BIG
-                return result
-
-            # UBIFS detection
-            elif "ubifs" in desc or "ubi " in desc:
-                result["filesystem_type"] = FilesystemType.UBIFS
-                return result
-
-            # RomFS detection
-            elif "romfs" in desc:
-                result["filesystem_type"] = FilesystemType.ROMFS
-                return result
-
-        return None if result["filesystem_type"] == FilesystemType.UNKNOWN else result
 
     def _parse_elf_header(self, data: bytes) -> Optional[Dict]:
         """Parse ELF header to determine architecture."""
@@ -582,21 +516,32 @@ class FirmwareExtractor:
         else:
             machine = struct.unpack(">H", data[18:20])[0]
 
-        # Map machine type to architecture
+        # Map ELF e_machine to architecture
         arch_map = {
+            0x02: Architecture.SPARC,
             0x03: Architecture.X86,
             0x08: Architecture.MIPS_BE,  # Default, check endianness
             0x14: Architecture.PPC,
+            0x15: Architecture.PPC64,
+            0x16: Architecture.SPARC,
             0x28: Architecture.ARM,
+            0x2A: Architecture.SH4,
             0x3E: Architecture.X86_64,
+            0x5E: Architecture.XTENSA,  # EM_XTENSA = 94
             0xB7: Architecture.ARM64,
+            0xF3: Architecture.RISCV,  # EM_RISCV = 243 (width via elf_class)
         }
 
         arch = arch_map.get(machine, Architecture.UNKNOWN)
 
         # Adjust MIPS based on endianness
-        if arch == Architecture.MIPS_BE and endian == Endianness.LITTLE:
-            arch = Architecture.MIPS_LE
+        if arch == Architecture.MIPS_BE:
+            if elf_class == 2:
+                arch = Architecture.MIPS64
+            elif endian == Endianness.LITTLE:
+                arch = Architecture.MIPS_LE
+        elif arch == Architecture.RISCV and elf_class == 2:
+            arch = Architecture.RISCV64
 
         return {
             "architecture": arch,
@@ -604,71 +549,71 @@ class FirmwareExtractor:
             "bits": 64 if elf_class == 2 else 32,
         }
 
-    def analyze_extracted_rootfs(self, rootfs_path: Path) -> Dict[str, Any]:
-        """
-        Analyze extracted rootfs to determine architecture and endianness.
+    # U-Boot uImage ih_arch field (include/image.h) -> our Architecture.
+    _UIMAGE_ARCH = {
+        2: Architecture.ARM,
+        3: Architecture.X86,
+        5: Architecture.MIPS_BE,
+        6: Architecture.MIPS64,
+        7: Architecture.PPC,
+        15: Architecture.SH4,
+        22: Architecture.ARM64,
+        26: Architecture.XTENSA,
+        29: Architecture.X86_64,
+    }
 
-        This should be called after extraction to get accurate metadata.
-        Returns dict with architecture and endianness.
-        """
-        logger.info(f"Analyzing extracted rootfs: {rootfs_path}")
+    def _detect_arch_from_uimage(self, data: bytes) -> Optional[Architecture]:
+        """Read the CPU field of the first U-Boot uImage header (big-endian)."""
+        magic = b"\x27\x05\x19\x56"
+        pos = data.find(magic)
+        if pos == -1 or pos + 32 > len(data):
+            return None
+        ih_arch = data[pos + 29]
+        return self._UIMAGE_ARCH.get(ih_arch)
 
-        result = {
-            "architecture": Architecture.UNKNOWN,
-            "endianness": Endianness.UNKNOWN,
-        }
+    @staticmethod
+    def _looks_like_esp(data: bytes) -> bool:
+        """Heuristic for Espressif ESP32/ESP8266 images (Xtensa)."""
+        if not data or data[0] != 0xE9:
+            return False
+        markers = (b"esp_image", b"ota_data", b"partition", b"bootloader_", b"esp-idf", b"phy_init")
+        head = data[:65536]
+        return sum(1 for m in markers if m in head) >= 2
 
-        if not rootfs_path.exists():
-            logger.warning(f"Rootfs path does not exist: {rootfs_path}")
-            return result
-
-        # Search for ELF binaries in common directories
-        search_dirs = ["bin", "sbin", "usr/bin", "usr/sbin", "lib"]
-        elf_files_checked = 0
-
-        for search_dir in search_dirs:
-            search_path = rootfs_path / search_dir
-            if not search_path.exists():
-                continue
-
-            try:
-                for item in search_path.iterdir():
-                    if not item.is_file():
-                        continue
-
-                    # Limit number of files checked for performance
-                    if elf_files_checked >= 10:
-                        break
-
+    def detect_arch_from_rootfs(self, rootfs_path: str) -> Optional[Dict]:
+        """Determine architecture by inspecting the first real ELF binary in an
+        extracted root filesystem. More reliable than header heuristics on the
+        compressed image (e.g. distinguishes mips vs mipsel)."""
+        root = Path(rootfs_path)
+        if not root.is_dir():
+            return None
+        # Prefer well-known native binaries, then any ELF.
+        preferred = ["bin/busybox", "bin/sh", "sbin/init", "lib/libc.so.0", "usr/bin/httpd"]
+        candidates: List[Path] = []
+        for rel in preferred:
+            p = root / rel
+            if p.is_file():
+                candidates.append(p)
+        if not candidates:
+            for p in root.rglob("*"):
+                if p.is_file() and not p.is_symlink():
                     try:
-                        with open(item, "rb") as f:
-                            header = f.read(52)
-
-                        if len(header) >= 52 and header[:4] == b"\x7fELF":
-                            elf_files_checked += 1
-                            arch_info = self._parse_elf_header(header)
-                            if arch_info and arch_info["architecture"] != Architecture.UNKNOWN:
-                                result["architecture"] = arch_info["architecture"]
-                                result["endianness"] = arch_info["endianness"]
-                                logger.info(
-                                    f"Detected from {item.name}: "
-                                    f"{arch_info['architecture'].value}, "
-                                    f"{arch_info['endianness'].value}"
-                                )
-                                return result
-                    except (OSError, PermissionError) as e:
-                        logger.debug(f"Could not read {item}: {e}")
+                        with open(p, "rb") as fh:
+                            if fh.read(4) == b"\x7fELF":
+                                candidates.append(p)
+                                break
+                    except OSError:
                         continue
-            except (OSError, PermissionError) as e:
-                logger.debug(f"Could not access directory {search_path}: {e}")
+        for p in candidates:
+            try:
+                with open(p, "rb") as fh:
+                    header = fh.read(52)
+            except OSError:
                 continue
-
-        if elf_files_checked == 0:
-            logger.warning("No ELF binaries found in extracted rootfs")
-        else:
-            logger.warning(f"Checked {elf_files_checked} ELF files but could not determine architecture")
-
-        return result
+            info = self._parse_elf_header(header)
+            if info and info["architecture"] != Architecture.UNKNOWN:
+                return info
+        return None
 
     def _analyze_entropy(self, data: bytes, block_size: int = 1024) -> Dict:
         """Analyze entropy of firmware data."""

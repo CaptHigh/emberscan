@@ -25,8 +25,6 @@ from .logger import ProgressLogger, get_logger, setup_logging
 from .models import (
     Architecture,
     EmulationState,
-    Endianness,
-    FilesystemType,
     FirmwareInfo,
     ScanResult,
     ScanSession,
@@ -132,6 +130,7 @@ class EmberScanner:
             "cve": ("..scanners.cve_scanner", "CVEScanner"),
             "credentials": ("..scanners.credential_scanner", "CredentialScanner"),
             "crypto": ("..scanners.crypto_scanner", "CryptoScanner"),
+            "emulation": ("..scanners.emulation_scanner", "EmulationScanner"),
         }
 
         if scanner_name not in scanner_map:
@@ -190,19 +189,45 @@ class EmberScanner:
                 firmware_info = self._analyze_firmware(firmware_path)
                 session.firmware = firmware_info
 
-            # Phase 2: Extract filesystem
+            # Phase 2: Extract filesystem. If the image can't be unpacked
+            # (bare-metal MCU firmware, encrypted/proprietary blob, a single
+            # executable), fall back to raw analysis instead of failing.
+            extracted_ok = False
             with ProgressLogger(logger, "Firmware Extraction"):
-                extraction_path = self._extract_firmware(firmware_info)
-                firmware_info.extraction_path = str(extraction_path)
-                firmware_info.extracted = True
+                try:
+                    extraction_path = self._extract_firmware(firmware_info)
+                    firmware_info.extraction_path = str(extraction_path)
+                    firmware_info.extracted = True
+                    extracted_ok = True
+                except Exception as e:
+                    logger.warning(f"Filesystem extraction not possible, using raw analysis: {e}")
 
-            # Phase 3: Static analysis (always performed)
-            with ProgressLogger(logger, "Static Analysis"):
-                static_results = self._run_static_analysis(firmware_info)
-                session.scan_results.extend(static_results)
+            if extracted_ok:
+                # Phase 3: Static analysis over the extracted filesystem
+                with ProgressLogger(logger, "Static Analysis"):
+                    static_results = self._run_static_analysis(firmware_info)
+                    session.scan_results.extend(static_results)
 
-            # Phase 4: Emulation and dynamic analysis
-            if not skip_emulation:
+                # Phase 3b: Emulation-driven analysis (per-binary; no full-system
+                # boot required, so it runs even when QEMU emulation is unavailable)
+                emu_cfg = getattr(self.config, "emulation", None)
+                if (
+                    not skip_emulation
+                    and emu_cfg
+                    and emu_cfg.enabled
+                    and (scanners is None or "emulation" in scanners)
+                ):
+                    with ProgressLogger(logger, "Emulated Analysis"):
+                        emu_results = self._run_emulated_analysis(firmware_info)
+                        session.scan_results.extend(emu_results)
+            else:
+                # Raw fallback for non-extractable images
+                with ProgressLogger(logger, "Raw Static Analysis"):
+                    session.scan_results.extend(self._run_raw_analysis(firmware_info))
+                skip_emulation = True  # no rootfs / not a bootable Linux image
+
+            # Phase 4: Full-system emulation and network dynamic analysis
+            if not skip_emulation and extracted_ok:
                 with ProgressLogger(logger, "Dynamic Analysis"):
                     emulation_state = self._start_emulation(firmware_info)
                     if emulation_state and emulation_state.boot_successful:
@@ -216,6 +241,12 @@ class EmberScanner:
 
                         # Cleanup emulation
                         self._stop_emulation(emulation_state)
+
+            # Collapse identical findings repeated across duplicate binaries
+            # (busybox applets, symlinked libraries) so real issues stay visible.
+            removed = session.deduplicate()
+            if removed:
+                logger.info(f"De-duplicated {removed} repeated findings")
 
             # Phase 5: CVE correlation
             with ProgressLogger(logger, "CVE Correlation"):
@@ -302,37 +333,14 @@ class EmberScanner:
 
         firmware.rootfs_path = str(rootfs_path)
 
-        # Detect filesystem type from extraction path if still unknown
-        if firmware.filesystem_type == FilesystemType.UNKNOWN:
-            rootfs_str = str(rootfs_path).lower()
-            if "squashfs" in rootfs_str:
-                firmware.filesystem_type = FilesystemType.SQUASHFS
-                logger.info("Updated filesystem type from path: squashfs")
-            elif "cramfs" in rootfs_str:
-                firmware.filesystem_type = FilesystemType.CRAMFS
-                logger.info("Updated filesystem type from path: cramfs")
-            elif "jffs2" in rootfs_str:
-                firmware.filesystem_type = FilesystemType.JFFS2
-                logger.info("Updated filesystem type from path: jffs2")
-            elif "ubifs" in rootfs_str:
-                firmware.filesystem_type = FilesystemType.UBIFS
-                logger.info("Updated filesystem type from path: ubifs")
-            elif "romfs" in rootfs_str:
-                firmware.filesystem_type = FilesystemType.ROMFS
-                logger.info("Updated filesystem type from path: romfs")
-
-        # Re-analyze to detect architecture/endianness from extracted binaries
-        if firmware.architecture == Architecture.UNKNOWN or firmware.endianness == Endianness.UNKNOWN:
-            logger.info("Re-analyzing firmware from extracted rootfs")
-            rootfs_analysis = self.extractor.analyze_extracted_rootfs(rootfs_path)
-
-            if rootfs_analysis["architecture"] != Architecture.UNKNOWN:
-                firmware.architecture = rootfs_analysis["architecture"]
-                logger.info(f"Updated architecture from rootfs: {firmware.architecture.value}")
-
-            if rootfs_analysis["endianness"] != Endianness.UNKNOWN:
-                firmware.endianness = rootfs_analysis["endianness"]
-                logger.info(f"Updated endianness from rootfs: {firmware.endianness.value}")
+        # The compressed top-level image rarely reveals the CPU; now that we
+        # have real binaries, refine the architecture (e.g. mips -> mipsel).
+        if firmware.architecture in (None, Architecture.UNKNOWN):
+            info = self.extractor.detect_arch_from_rootfs(str(rootfs_path))
+            if info:
+                firmware.architecture = info["architecture"]
+                firmware.endianness = info.get("endianness", firmware.endianness)
+                logger.info(f"Architecture refined from rootfs: {firmware.architecture.value}")
 
         logger.info(f"Extracted to: {rootfs_path}")
         return rootfs_path
@@ -371,6 +379,39 @@ class EmberScanner:
 
         return results
 
+    def _run_emulated_analysis(self, firmware: FirmwareInfo) -> List[ScanResult]:
+        """Run per-binary emulation analysis over the extracted rootfs.
+
+        Loads individual binaries, emulates their code, and runs the dynamic
+        detectors (memory-safety, taint, info-leak, weak-code). Independent of
+        full-system QEMU boot.
+        """
+        results = []
+
+        if not firmware.rootfs_path:
+            logger.warning("No rootfs path - skipping emulated analysis")
+            return results
+
+        try:
+            scanner = self.get_scanner("emulation")
+            result = scanner.scan(firmware.rootfs_path, firmware)
+            results.append(result)
+        except Exception as e:
+            logger.error(f"Emulation scanner failed: {e}")
+
+        return results
+
+    def _run_raw_analysis(self, firmware: FirmwareInfo) -> List[ScanResult]:
+        """Static string analysis for images that can't be unpacked."""
+        from ..scanners.raw_scanner import RawFirmwareScanner
+
+        try:
+            scanner = RawFirmwareScanner(self.config)
+            return [scanner.scan(firmware.file_path, firmware)]
+        except Exception as e:
+            logger.error(f"Raw analysis failed: {e}")
+            return []
+
     def _start_emulation(self, firmware: FirmwareInfo) -> Optional[EmulationState]:
         """Start QEMU emulation of firmware."""
         logger.info(f"Starting emulation for: {firmware.name}")
@@ -394,7 +435,14 @@ class EmberScanner:
                 return None
 
         except EmulationError as e:
-            logger.error(f"Emulation failed: {e}")
+            # Full-system boot is best-effort (needs a matching kernel/QEMU and
+            # a bootable rootfs). Per-binary emulated analysis already ran, so
+            # treat this as a soft limitation rather than a scan failure. Logged
+            # at INFO so it stays in the log file without cluttering the CLI.
+            logger.info(f"Full-system emulation unavailable, skipping: {e}")
+            return None
+        except Exception as e:
+            logger.info(f"Full-system emulation unavailable, skipping: {e}")
             return None
 
     def _stop_emulation(self, state: EmulationState):
@@ -482,9 +530,10 @@ class EmberScanner:
         from ..reporters.html_reporter import HTMLReporter
         from ..reporters.json_reporter import JSONReporter
 
-        # Use configured output directory instead of workspace reports
-        output_base = Path(self.config.reporter.output_dir)
-        report_dir = output_base / session.id
+        # Honour the user-configured output directory (what the CLI reports to
+        # the user) and fall back to the workspace reports dir otherwise.
+        base = self.config.reporter.output_dir or str(self.dirs["reports"])
+        report_dir = Path(base) / session.report_slug
         report_dir.mkdir(parents=True, exist_ok=True)
 
         for format_name in self.config.reporter.output_formats:

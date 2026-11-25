@@ -139,6 +139,8 @@ cython_debug/
 # EmberScan specific
 workspace/
 reports/
+emberscan_reports/
+emulation_temp/
 extracted/
 emulation/
 logs/
@@ -148,6 +150,12 @@ temp/
 *.img
 *.sqfs
 firmware_dumps/
+
+# Generated scan reports (regenerate with `emberscan report <file.json>`)
+emberscan_report_*.html
+emberscan_report_*.json
+emberscan_report_*.sarif
+emberscan_*.sarif
 
 # Kernel images (download separately)
 kernels/*.vmlinux*
@@ -169,3 +177,11 @@ Thumbs.db
 # Test artifacts
 tests/fixtures/real_firmware/
 tests/output/
+
+# EmberScan dynamic-analysis / test artifacts
+tests/samples/
+tests/rootfs/
+*.elf
+
+# Claude Code local settings
+.claude/settings.local.json

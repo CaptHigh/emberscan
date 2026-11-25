@@ -3,12 +3,49 @@ Utility functions for EmberScan.
 """
 
 import hashlib
+import importlib.util
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Python packages for the dynamic emulation subsystem.
+# import-name -> (pip requirement, description)
+PYTHON_DEPS: Dict[str, Tuple[str, str]] = {
+    "unicorn": ("unicorn>=2.0.0", "CPU emulator (dynamic analysis)"),
+    "capstone": ("capstone>=5.0.0", "Disassembler"),
+    "keystone": ("keystone-engine>=0.9.2", "Assembler (verification harness)"),
+    "qiling": ("qiling>=1.4.6", "Linux user-space emulation framework"),
+}
+
+
+def check_python_deps() -> Dict[str, Dict]:
+    """Check importability of the emulation Python packages."""
+    results = {}
+    for import_name, (req, desc) in PYTHON_DEPS.items():
+        try:
+            installed = importlib.util.find_spec(import_name) is not None
+        except Exception:
+            installed = False
+        results[import_name] = {"installed": installed, "pip": req, "description": desc}
+    return results
+
+
+def pip_install(packages: List[str], upgrade_pip: bool = False) -> int:
+    """Install packages into the current interpreter via pip. Returns exit code."""
+    if upgrade_pip:
+        subprocess.call([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade"] + packages
+    print(f"Running: {' '.join(cmd)}")
+    return subprocess.call(cmd)
+
+
+def install_python_deps(upgrade_pip: bool = True) -> int:
+    """Install the emulation Python packages (unicorn/capstone/keystone/qiling)."""
+    reqs = [req for (req, _) in PYTHON_DEPS.values()]
+    return pip_install(reqs, upgrade_pip=upgrade_pip)
 
 
 def check_dependencies() -> Dict[str, bool]:
@@ -40,21 +77,106 @@ def check_dependencies() -> Dict[str, bool]:
     return results
 
 
+# Core Python libraries that ship with the base install.
+# import-name -> description
+CORE_PYTHON_DEPS: Dict[str, str] = {
+    "rich": "Console UI / tables",
+    "requests": "HTTP client (web scanner)",
+    "bs4": "HTML parsing (web scanner)",
+    "yaml": "Config parsing",
+    "jinja2": "HTML report templating",
+    "Crypto": "Crypto analysis (pycryptodome)",
+}
+
+
+def check_core_python_deps() -> Dict[str, Dict]:
+    """Check importability of the core (non-emulation) Python packages."""
+    results = {}
+    for import_name, desc in CORE_PYTHON_DEPS.items():
+        try:
+            installed = importlib.util.find_spec(import_name) is not None
+        except Exception:
+            installed = False
+        results[import_name] = {"installed": installed, "description": desc}
+    return results
+
+
 def print_dependency_status():
-    """Print dependency status in a formatted way."""
+    """Print dependency status using the shared rich UI (plain fallback)."""
+    try:
+        from ..core.ui import ui
+    except Exception:
+        ui = None
+
     deps = check_dependencies()
+    core = check_core_python_deps()
+    py = check_python_deps()
 
-    print("\n=== EmberScan Dependency Check ===\n")
+    def _table(title, items, name_key=lambda k: k):
+        rows = []
+        for key, info in items.items():
+            mark = "[green]✓[/green]" if info["installed"] else "[red]✗[/red]"
+            rows.append((mark, name_key(key), info["description"]))
+        if ui is not None and ui.rich:
+            from rich import box
+            from rich.table import Table
 
-    for tool, info in deps.items():
-        status = "✓" if info["installed"] else "✗"
-        color = "\033[92m" if info["installed"] else "\033[91m"
-        reset = "\033[0m"
-        print(f"  {color}{status}{reset} {tool:20} - {info['description']}")
+            t = Table(
+                title=title,
+                title_justify="left",
+                box=box.SIMPLE,
+                show_edge=False,
+                header_style="bold",
+            )
+            t.add_column("", no_wrap=True)
+            t.add_column("Component", no_wrap=True)
+            t.add_column("Purpose", style="dim")
+            for mark, name, desc in rows:
+                t.add_row(mark, name, desc)
+            ui._console.print(t)
+        else:
+            print(f"\n{title}")
+            for mark, name, desc in rows:
+                flag = "OK " if "green" in mark else "-- "
+                print(f"  [{flag}] {name:22} - {desc}")
 
-    installed = sum(1 for t in deps.values() if t["installed"])
-    total = len(deps)
-    print(f"\n  {installed}/{total} tools installed\n")
+    if ui is not None:
+        ui.rule("Dependency Check")
+    else:
+        print("\n=== EmberScan Dependency Check ===")
+
+    _table("Core Python libraries", core)
+    _table("Python emulation libraries (analyze / dynamic)", py)
+    _table("External tools", deps)
+
+    ext_ok = sum(1 for t in deps.values() if t["installed"])
+    py_ok = sum(1 for t in py.values() if t["installed"])
+    core_ok = sum(1 for t in core.values() if t["installed"])
+
+    def _line(msg):
+        (ui.info if ui is not None else print)(msg)
+
+    _line("")
+    _line(
+        f"Core libs: {core_ok}/{len(core)}   "
+        f"Emulation libs: {py_ok}/{len(py)}   "
+        f"External tools: {ext_ok}/{len(deps)}"
+    )
+
+    if py_ok < len(py):
+        if ui is not None:
+            ui.warn(
+                "Emulation libraries missing — install with: "
+                "emberscan install-deps  (or)  python scripts/install.py"
+            )
+        else:
+            print("\n  Install emulation libs:  emberscan install-deps")
+    if core_ok < len(core):
+        if ui is not None:
+            ui.warn("Core libraries missing — reinstall with: pip install -e .")
+        else:
+            print("\n  Reinstall core libs:  pip install -e .")
+    print()
 
 
 def calculate_file_hashes(filepath: str) -> Dict[str, str]:

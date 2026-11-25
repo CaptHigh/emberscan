@@ -37,7 +37,7 @@ class JSONReporter:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        report_file = output_path / f"emberscan_report_{session.id}.json"
+        report_file = output_path / f"emberscan_{session.report_slug}.json"
 
         # Build report structure
         report = {
@@ -105,7 +105,7 @@ class JSONReporter:
 
     def _generate_sarif(self, session: ScanSession, output_path: Path) -> str:
         """Generate SARIF format report for integration with code analysis tools."""
-        sarif_file = output_path / f"emberscan_report_{session.id}.sarif"
+        sarif_file = output_path / f"emberscan_{session.report_slug}.sarif"
 
         sarif_report = {
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",

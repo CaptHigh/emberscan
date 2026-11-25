@@ -103,11 +103,9 @@ class TestCredentialScanner:
         """Test private key detection."""
         # Create a mock private key
         key_file = temp_dir / "server.key"
-        key_file.write_text(
-            """-----BEGIN RSA PRIVATE KEY-----
+        key_file.write_text("""-----BEGIN RSA PRIVATE KEY-----
 MIIEpQIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy...
------END RSA PRIVATE KEY-----"""
-        )
+-----END RSA PRIVATE KEY-----""")
 
         scanner = CredentialScanner(config)
         vulns = scanner._find_private_keys(temp_dir)
@@ -115,20 +113,27 @@ MIIEpQIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy...
         assert len(vulns) >= 1
         assert any("Private Key" in v.title for v in vulns)
 
-    def test_is_false_positive(self, config):
-        """Test false positive detection."""
+    def test_is_plausible_secret(self, config):
+        """Test secret-value validation (false-positive filtering)."""
         scanner = CredentialScanner(config)
 
-        # Should be false positives - method requires (credential, cred_type) arguments
-        assert scanner._is_false_positive("", "password") == True
-        assert scanner._is_false_positive("ab", "password") == True
-        assert scanner._is_false_positive("your_password", "password") == True
-        assert scanner._is_false_positive("${PASSWORD}", "password") == True
-        assert scanner._is_false_positive("placeholder", "password") == True
+        # Not plausible secrets (should be rejected)
+        assert scanner._is_plausible_secret("", False, False, False) is False
+        assert scanner._is_plausible_secret("ab", False, False, False) is False
+        assert scanner._is_plausible_secret("your_password", False, False, False) is False
+        assert scanner._is_plausible_secret("${PASSWORD}", False, False, False) is False
+        assert scanner._is_plausible_secret("placeholder", False, False, False) is False
+        assert scanner._is_plausible_secret("true", False, False, False) is False
+        # variable reference / property access in code is not a literal secret
+        assert scanner._is_plausible_secret("getPassword()", False, False, True) is False
+        assert scanner._is_plausible_secret("this.pass", False, False, True) is False
+        assert scanner._is_plausible_secret("myVariable", False, False, True) is False
 
-        # Should not be false positives
-        assert scanner._is_false_positive("actualP@ssw0rd!", "password") == False
-        assert scanner._is_false_positive("admin123", "password") == False
+        # Plausible secrets (should pass)
+        assert scanner._is_plausible_secret("actualP@ssw0rd!", False, False, False) is True
+        assert scanner._is_plausible_secret("admin123", False, False, False) is True
+        # a bare identifier RHS is fine in a config/data file (not code)
+        assert scanner._is_plausible_secret("s3cretValue", False, False, False) is True
 
     def test_search_credentials(self, config, mock_vulnerable_webapp, sample_firmware_info):
         """Test credential pattern matching."""
