@@ -8,7 +8,6 @@ suitable for integration with other tools and pipelines.
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from ..core.config import Config
 from ..core.logger import get_logger

@@ -5,24 +5,18 @@ Handles extraction of firmware from various sources including
 SPI flash dumps, manufacturer firmware files, and compressed images.
 """
 
-import os
 import re
-import shutil
 import struct
 import subprocess
-import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from ..core.config import Config
 from ..core.exceptions import (
-    EncryptedFirmwareError,
-    ExtractionError,
     FilesystemExtractionError,
-    UnsupportedFirmwareError,
 )
 from ..core.logger import get_logger
-from ..core.models import Architecture, Endianness, FilesystemType, FirmwareInfo
+from ..core.models import Architecture, Endianness, FilesystemType
 
 logger = get_logger(__name__)
 
@@ -248,7 +242,7 @@ class FirmwareExtractor:
                 ["strings", "-n", "8", firmware_path], capture_output=True, text=True, timeout=60
             )
             strings_output = result.stdout
-        except:
+        except Exception:
             return metadata
 
         # Vendor detection patterns
@@ -709,7 +703,6 @@ class SPIExtractor:
 
             # Verify read
             if verify:
-                verify_path = f"{output_path}.verify"
                 subprocess.run(
                     ["flashrom", "-p", self.programmer, "-v", output_path],
                     capture_output=True,

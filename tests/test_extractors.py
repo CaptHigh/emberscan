@@ -2,8 +2,6 @@
 Tests for firmware extraction functionality.
 """
 
-from pathlib import Path
-
 import pytest
 
 from emberscan.core.models import Architecture, Endianness, FilesystemType
@@ -108,7 +106,7 @@ class TestFirmwareExtractor:
         # With truly random data, entropy should be very high (close to 8)
         # The implementation uses > 7.9 threshold for likely_encrypted
         # If not encrypted, it should at least be likely_compressed (> 7.0)
-        assert entropy["likely_encrypted"] == True or entropy["likely_compressed"] == True
+        assert entropy["likely_encrypted"] is True or entropy["likely_compressed"] is True
 
 
 class TestSPIExtractor:
@@ -116,7 +114,7 @@ class TestSPIExtractor:
 
     def test_supported_programmers(self, config):
         """Test supported programmer list."""
-        spi = SPIExtractor(config)
+        SPIExtractor(config)
 
         assert "ch341a_spi" in SPIExtractor.SUPPORTED_PROGRAMMERS
         assert "buspirate_spi" in SPIExtractor.SUPPORTED_PROGRAMMERS

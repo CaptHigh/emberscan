@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List
 
 from ..core.logger import get_logger
-from ..core.models import FirmwareInfo, ScanResult, Severity, Vulnerability, VulnerabilityType
+from ..core.models import FirmwareInfo, ScanResult, Severity, VulnerabilityType
 from .base import BaseScanner
 
 logger = get_logger(__name__)

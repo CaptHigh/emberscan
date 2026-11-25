@@ -5,20 +5,15 @@ Coordinates firmware extraction, emulation, vulnerability scanning,
 and report generation.
 """
 
-import asyncio
-import os
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional
 
 from .config import Config
 from .exceptions import (
-    ConfigurationError,
     EmberScanError,
     EmulationError,
-    ExtractionError,
     ScannerError,
 )
 from .logger import ProgressLogger, get_logger, setup_logging
@@ -29,7 +24,6 @@ from .models import (
     ScanResult,
     ScanSession,
     ScanStatus,
-    Vulnerability,
 )
 
 logger = get_logger(__name__)
@@ -287,7 +281,7 @@ class EmberScanner:
             for emu_id in list(self.active_emulations.keys()):
                 try:
                     self._stop_emulation(self.active_emulations[emu_id])
-                except:
+                except Exception:
                     pass
 
         return session

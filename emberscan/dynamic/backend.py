@@ -22,7 +22,7 @@ can be unit-tested against a scripted event stream with no native dependencies.
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional
 
 from .events import TraceEvent

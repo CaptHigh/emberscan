@@ -33,7 +33,6 @@ class BaseScanner(abc.ABC):
     @abc.abstractmethod
     def name(self) -> str:
         """Scanner name identifier."""
-        pass
 
     @property
     def scan_type(self) -> str:
@@ -53,7 +52,6 @@ class BaseScanner(abc.ABC):
         Returns:
             ScanResult with findings
         """
-        pass
 
     def _create_result(self) -> ScanResult:
         """Create a new ScanResult for this scanner."""

@@ -18,7 +18,6 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Quiet Unicorn's direct-to-stderr "register accessing" deprecation notice
 # before any emulation backend (Unicorn/Qiling) spins up.
@@ -29,12 +28,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from emberscan import __version__
 from emberscan.core.config import Config
-from emberscan.core.logger import get_logger, setup_logging
+from emberscan.core.logger import setup_logging
 from emberscan.core.scanner import EmberScanner
 from emberscan.core.ui import SEVERITY_ORDER, ui
 from emberscan.emulators.qemu_manager import QEMUManager
 from emberscan.extractors.firmware_extractor import FirmwareExtractor, SPIExtractor
-from emberscan.utils import check_dependencies, install_python_deps, print_dependency_status
+from emberscan.utils import install_python_deps, print_dependency_status
 
 
 # Minimal ANSI codes kept only for a couple of plain-text spots; all rich
@@ -249,7 +248,7 @@ Examples:
     # =========================================================================
     # Check dependencies command
     # =========================================================================
-    deps_parser = subparsers.add_parser("check-deps", help="Check installed dependencies")
+    subparsers.add_parser("check-deps", help="Check installed dependencies")
 
     # =========================================================================
     # Install dependencies command
@@ -276,7 +275,6 @@ Examples:
 
 def cmd_scan(args, config: Config):
     """Execute scan command."""
-    logger = get_logger("cli")
 
     # Validate firmware path
     firmware_path = Path(args.firmware)
@@ -493,19 +491,19 @@ def cmd_emulate(args, config: Config):
         )
 
         print(f"\n{Colors.GREEN}QEMU started (PID: {state.pid}){Colors.END}")
-        print(f"\nWaiting for boot...")
+        print("\nWaiting for boot...")
 
         if manager.wait_for_boot(state, timeout=300):
             print(f"\n{Colors.GREEN}Firmware booted successfully!{Colors.END}")
-            print(f"\nAccess points:")
+            print("\nAccess points:")
             print(f"  Web:    http://localhost:{args.http_port}")
             print(f"  SSH:    ssh -p {args.ssh_port} root@localhost")
             print(f"  Telnet: telnet localhost {args.telnet_port}")
 
             if args.debug:
-                print(f"  GDB:    target remote localhost:1234")
+                print("  GDB:    target remote localhost:1234")
 
-            print(f"\nPress Ctrl+C to stop emulation...")
+            print("\nPress Ctrl+C to stop emulation...")
 
             # Wait for user interrupt
             try:

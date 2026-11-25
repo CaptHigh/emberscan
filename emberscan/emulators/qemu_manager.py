@@ -5,29 +5,23 @@ Manages QEMU virtual machines for firmware emulation across
 multiple architectures (MIPS, ARM, x86, PowerPC).
 """
 
-import os
 import shutil
-import signal
 import socket
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from ..core.config import Config
 from ..core.exceptions import (
-    EmulationBootFailure,
     EmulationError,
-    EmulationTimeoutError,
     KernelNotFoundError,
-    NetworkConfigurationError,
     QEMUNotFoundError,
     UnsupportedArchitectureError,
 )
 from ..core.logger import get_logger
-from ..core.models import Architecture, EmulationState, Endianness, FirmwareInfo
+from ..core.models import Architecture, EmulationState, FirmwareInfo
 
 logger = get_logger(__name__)
 
@@ -248,7 +242,7 @@ class QEMUManager:
                     # Force kill
                     process.kill()
                     process.wait()
-            except:
+            except Exception:
                 pass
 
             del self._instances[state.id]
@@ -420,7 +414,7 @@ class QEMUManager:
             output = process.stdout.read(4096)
             if output:
                 return output.decode("utf-8", errors="ignore")
-        except:
+        except Exception:
             pass
 
         return ""
@@ -445,11 +439,9 @@ class QEMUManager:
     def create_snapshot(self, state: EmulationState, name: str = "clean"):
         """Create QEMU snapshot for quick reset."""
         # This requires QEMU monitor access
-        pass
 
     def restore_snapshot(self, state: EmulationState, name: str = "clean"):
         """Restore QEMU snapshot."""
-        pass
 
     def _find_kernel(self, kernel_name: str) -> Optional[Path]:
         """Find kernel file in kernel directory."""
@@ -748,7 +740,7 @@ esac
             result = sock.connect_ex((host, port))
             sock.close()
             return result == 0
-        except:
+        except Exception:
             return False
 
     def _check_http_service(self, host: str, port: int, timeout: float = 5.0) -> bool:
@@ -760,7 +752,9 @@ esac
             # Try to get HTTP response
             url = f"http://{host}:{port}/"
             req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=timeout) as response:
+            with urllib.request.urlopen(
+                req, timeout=timeout
+            ) as response:  # nosec B310 - fixed http scheme, local forwarded port
                 # Any HTTP response (even 404) means the server is working
                 return response.status < 600
         except urllib.error.HTTPError as e:
@@ -783,7 +777,7 @@ esac
             sock.close()
             # Check for SSH banner
             return banner.startswith("SSH-")
-        except:
+        except Exception:
             return False
 
     def _check_telnet_service(self, host: str, port: int, timeout: float = 5.0) -> bool:
@@ -797,7 +791,7 @@ esac
             sock.close()
             # If we got any data, telnet is responding
             return len(data) > 0
-        except:
+        except Exception:
             return False
 
     def list_available_kernels(self) -> List[Dict]:

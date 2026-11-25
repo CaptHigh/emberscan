@@ -9,13 +9,10 @@ Scans firmware for hardcoded credentials, API keys, and secrets:
 - Database credentials
 """
 
-import base64
 import hashlib
-import os
 import re
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 from ..core.config import Config
 from ..core.logger import get_logger
@@ -406,7 +403,7 @@ class CredentialScanner(BaseScanner):
                                         severity=Severity.CRITICAL,
                                         vuln_type=VulnerabilityType.HARDCODED_CREDENTIALS,
                                         file_path="etc/shadow",
-                                        evidence=f"Password is a common/weak password",
+                                        evidence="Password is a common/weak password",
                                         remediation="Use a strong, unique password",
                                     )
                                     vulnerabilities.append(vuln)
@@ -439,7 +436,7 @@ class CredentialScanner(BaseScanner):
 
                     if crypt.crypt(password, hash_str) == hash_str:
                         return password
-                except:
+                except Exception:
                     pass
 
             # SHA512 crypt
@@ -449,7 +446,7 @@ class CredentialScanner(BaseScanner):
 
                     if crypt.crypt(password, hash_str) == hash_str:
                         return password
-                except:
+                except Exception:
                     pass
 
             # Plain MD5

@@ -10,11 +10,8 @@ Scans web interfaces for common vulnerabilities including:
 - Directory traversal
 """
 
-import re
-import socket
 import subprocess
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from ..core.config import Config
@@ -22,7 +19,6 @@ from ..core.logger import get_logger
 from ..core.models import (
     FirmwareInfo,
     ScanResult,
-    ScanStatus,
     Severity,
     Vulnerability,
     VulnerabilityType,
@@ -115,7 +111,6 @@ class WebScanner(BaseScanner):
 
         try:
             import requests
-            from bs4 import BeautifulSoup
 
             self.session = requests.Session()
             self.session.headers["User-Agent"] = self.user_agent
@@ -491,7 +486,7 @@ class WebScanner(BaseScanner):
                                 vuln_type=VulnerabilityType.PATH_TRAVERSAL,
                                 endpoint=url,
                                 parameter=param_name,
-                                evidence=f"Successfully read /etc/passwd",
+                                evidence="Successfully read /etc/passwd",
                                 remediation="Validate and sanitize file path inputs",
                             )
                             vulnerabilities.append(vuln)

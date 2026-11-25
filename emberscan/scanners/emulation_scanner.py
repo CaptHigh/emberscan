@@ -18,9 +18,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import List, Optional
 
-from ..core.config import Config
 from ..core.logger import get_logger
 from ..core.models import (
     Architecture,
@@ -76,7 +74,6 @@ class EmulationScanner(BaseScanner):
         emu_cfg = getattr(self.config, "emulation", None)
         try:
             from ..dynamic import EmulationRunner, get_backend, select_binaries
-            from ..dynamic.backend import BackendUnavailable
         except Exception as exc:  # pragma: no cover - import guard
             self._fail_scan(result, f"dynamic subsystem unavailable: {exc}")
             return result

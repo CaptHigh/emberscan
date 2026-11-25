@@ -9,13 +9,11 @@ Correlates firmware components with known CVEs:
 """
 
 import json
-import os
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from ..core.config import Config
 from ..core.logger import get_logger
@@ -320,8 +318,8 @@ class CVEScanner(BaseScanner):
 
                 patterns = [
                     rf"{component_name}[/_-]?v?(\d+\.\d+\.\d+)",
-                    rf"version[:\s]+(\d+\.\d+\.\d+)",
-                    rf"v(\d+\.\d+\.\d+)",
+                    r"version[:\s]+(\d+\.\d+\.\d+)",
+                    r"v(\d+\.\d+\.\d+)",
                 ]
 
                 for pattern in patterns:

@@ -2,8 +2,6 @@
 Tests for EmberScan vulnerability scanners.
 """
 
-from pathlib import Path
-
 import pytest
 
 from emberscan.core.models import ScanStatus, Severity
@@ -51,10 +49,10 @@ class TestBinaryScanner:
         scanner = BinaryScanner(config)
 
         busybox = sample_squashfs / "bin" / "busybox"
-        assert scanner._is_elf(busybox) == True
+        assert scanner._is_elf(busybox) is True
 
         passwd = sample_squashfs / "etc" / "passwd"
-        assert scanner._is_elf(passwd) == False
+        assert scanner._is_elf(passwd) is False
 
     def test_check_suid_binaries(self, config, sample_squashfs):
         """Test SUID binary detection."""
@@ -208,6 +206,6 @@ class TestCVEScanner:
         scanner = CVEScanner(config)
 
         # Test version is affected (below threshold)
-        assert scanner._version_affected("1.27.0", ["<1.35"]) == True
-        assert scanner._version_affected("1.27.0", ["<1.20"]) == False
-        assert scanner._version_affected("1.33.0", ["<1.34"]) == True
+        assert scanner._version_affected("1.27.0", ["<1.35"]) is True
+        assert scanner._version_affected("1.27.0", ["<1.20"]) is False
+        assert scanner._version_affected("1.33.0", ["<1.34"]) is True

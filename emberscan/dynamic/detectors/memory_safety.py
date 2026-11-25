@@ -15,19 +15,18 @@ supplies allocation sizes (call args) and returned pointers (return values).
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from ..events import (
     CRITICAL,
     HIGH,
     MEDIUM,
-    READ,
     WRITE,
     CallEvent,
     MemEvent,
     RetEvent,
 )
-from .base import Detector, RunContext
+from .base import Detector
 
 REDZONE = 16  # bytes guarded on each side of a heap allocation
 

@@ -8,12 +8,10 @@ Generates professional HTML reports with:
 - Remediation guidance
 """
 
-import json
-import os
 from datetime import datetime
 from pathlib import Path
 from string import Template
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from ..core.config import Config
 from ..core.logger import get_logger
@@ -41,39 +39,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             --text-secondary: #aaa;
             --accent: #0f3460;
         }
-        
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        
+
         body {
             font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
             background: var(--bg-dark);
             color: var(--text-primary);
             line-height: 1.6;
         }
-        
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
             padding: 20px;
         }
-        
+
         header {
             background: linear-gradient(135deg, var(--bg-card) 0%, var(--accent) 100%);
             padding: 40px 20px;
             text-align: center;
             border-bottom: 3px solid var(--critical);
         }
-        
+
         header h1 {
             font-size: 2.5rem;
             margin-bottom: 10px;
         }
-        
+
         header .logo {
             font-size: 3rem;
             margin-bottom: 15px;
         }
-        
+
         .meta-info {
             display: flex;
             justify-content: center;
@@ -82,20 +80,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin-top: 20px;
             color: var(--text-secondary);
         }
-        
+
         .meta-info span {
             display: flex;
             align-items: center;
             gap: 8px;
         }
-        
+
         .summary-cards {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin: 30px 0;
         }
-        
+
         .card {
             background: var(--bg-card);
             border-radius: 12px;
@@ -104,29 +102,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border: 1px solid rgba(255,255,255,0.1);
             transition: transform 0.2s;
         }
-        
+
         .card:hover {
             transform: translateY(-5px);
         }
-        
+
         .card.critical { border-left: 4px solid var(--critical); }
         .card.high { border-left: 4px solid var(--high); }
         .card.medium { border-left: 4px solid var(--medium); }
         .card.low { border-left: 4px solid var(--low); }
         .card.info { border-left: 4px solid var(--info); }
-        
+
         .card .count {
             font-size: 3rem;
             font-weight: bold;
             margin-bottom: 10px;
         }
-        
+
         .card.critical .count { color: var(--critical); }
         .card.high .count { color: var(--high); }
         .card.medium .count { color: var(--medium); }
         .card.low .count { color: var(--low); }
         .card.info .count { color: var(--info); }
-        
+
         .section {
             background: var(--bg-card);
             border-radius: 12px;
@@ -134,36 +132,36 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin-bottom: 30px;
             border: 1px solid rgba(255,255,255,0.1);
         }
-        
+
         .section h2 {
             color: var(--text-primary);
             margin-bottom: 20px;
             padding-bottom: 10px;
             border-bottom: 2px solid var(--accent);
         }
-        
+
         .firmware-info {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 15px;
         }
-        
+
         .firmware-info .item {
             display: flex;
             flex-direction: column;
         }
-        
+
         .firmware-info .label {
             color: var(--text-secondary);
             font-size: 0.85rem;
             text-transform: uppercase;
         }
-        
+
         .firmware-info .value {
             font-size: 1.1rem;
             font-family: monospace;
         }
-        
+
         .vulnerability {
             background: rgba(0,0,0,0.2);
             border-radius: 8px;
@@ -171,25 +169,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin-bottom: 15px;
             border-left: 4px solid;
         }
-        
+
         .vulnerability.critical { border-color: var(--critical); }
         .vulnerability.high { border-color: var(--high); }
         .vulnerability.medium { border-color: var(--medium); }
         .vulnerability.low { border-color: var(--low); }
         .vulnerability.info { border-color: var(--info); }
-        
+
         .vulnerability .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 15px;
         }
-        
+
         .vulnerability .title {
             font-size: 1.2rem;
             font-weight: 600;
         }
-        
+
         .severity-badge {
             padding: 5px 15px;
             border-radius: 20px;
@@ -197,29 +195,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-weight: bold;
             text-transform: uppercase;
         }
-        
+
         .severity-badge.critical { background: var(--critical); }
         .severity-badge.high { background: var(--high); color: #000; }
         .severity-badge.medium { background: var(--medium); color: #000; }
         .severity-badge.low { background: var(--low); }
         .severity-badge.info { background: var(--info); }
-        
+
         .vulnerability .details {
             display: grid;
             gap: 10px;
         }
-        
+
         .vulnerability .detail-row {
             display: grid;
             grid-template-columns: 150px 1fr;
             gap: 10px;
         }
-        
+
         .vulnerability .detail-label {
             color: var(--text-secondary);
             font-weight: 500;
         }
-        
+
         .vulnerability .evidence {
             background: rgba(0,0,0,0.3);
             padding: 10px;
@@ -228,33 +226,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-size: 0.9rem;
             overflow-x: auto;
         }
-        
+
         .cve-list {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
         }
-        
+
         .cve-tag {
             background: var(--accent);
             padding: 3px 10px;
             border-radius: 4px;
             font-size: 0.85rem;
         }
-        
+
         .cve-tag a {
             color: var(--text-primary);
             text-decoration: none;
         }
-        
+
         .cve-tag a:hover {
             text-decoration: underline;
         }
-        
+
         .scanner-results {
             margin-top: 15px;
         }
-        
+
         .scanner-badge {
             display: inline-block;
             background: var(--accent);
@@ -263,14 +261,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-size: 0.8rem;
             margin-bottom: 10px;
         }
-        
+
         footer {
             text-align: center;
             padding: 30px;
             color: var(--text-secondary);
             font-size: 0.9rem;
         }
-        
+
         @media print {
             body { background: #fff; color: #000; }
             .card, .section { border: 1px solid #ddd; }
@@ -289,7 +287,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <span>🔍 ${total_vulns} Findings</span>
         </div>
     </header>
-    
+
     <div class="container">
         <div class="summary-cards">
             <div class="card critical">
@@ -313,35 +311,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <div class="label">Info</div>
             </div>
         </div>
-        
+
         <div class="section">
             <h2>📋 Firmware Information</h2>
             <div class="firmware-info">
                 ${firmware_info}
             </div>
         </div>
-        
+
         <div class="section">
             <h2>🔴 Critical & High Vulnerabilities</h2>
             ${critical_high_vulns}
         </div>
-        
+
         <div class="section">
             <h2>🟡 Medium Vulnerabilities</h2>
             ${medium_vulns}
         </div>
-        
+
         <div class="section">
             <h2>🔵 Low & Informational</h2>
             ${low_info_vulns}
         </div>
-        
+
         <div class="section">
             <h2>📊 Scanner Results Summary</h2>
             ${scanner_summary}
         </div>
     </div>
-    
+
     <footer>
         <p>Generated by EmberScan v1.0.0 | ${generation_time}</p>
         <p>This report is confidential. Handle according to your organization's security policies.</p>

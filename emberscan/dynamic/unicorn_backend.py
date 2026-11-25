@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 import struct
 import time
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 # Silence Unicorn's noisy "register accessing on id 0 is deprecated" message,
 # which it prints directly to stderr on some arch/register combinations.

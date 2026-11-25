@@ -4,7 +4,6 @@ Utility functions for EmberScan.
 
 import hashlib
 import importlib.util
-import os
 import shutil
 import subprocess
 import sys
@@ -257,7 +256,7 @@ def is_elf_binary(filepath: str) -> bool:
         with open(filepath, "rb") as f:
             magic = f.read(4)
             return magic == b"\x7fELF"
-    except:
+    except Exception:
         return False
 
 
@@ -282,7 +281,7 @@ def get_elf_architecture(filepath: str) -> Optional[str]:
             }
 
             return arch_map.get(machine, "unknown")
-    except:
+    except Exception:
         return None
 
 

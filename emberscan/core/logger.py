@@ -6,7 +6,6 @@ and optional file logging with rotation.
 """
 
 import logging
-import os
 import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler

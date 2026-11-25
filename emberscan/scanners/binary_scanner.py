@@ -9,11 +9,8 @@ Analyzes executable binaries in firmware for security issues:
 - Hardcoded secrets
 """
 
-import os
 import re
-import struct
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -22,7 +19,6 @@ from ..core.logger import get_logger
 from ..core.models import (
     FirmwareInfo,
     ScanResult,
-    ScanStatus,
     Severity,
     Vulnerability,
     VulnerabilityType,
@@ -175,7 +171,7 @@ class BinaryScanner(BaseScanner):
             with open(path, "rb") as f:
                 magic = f.read(4)
                 return magic == b"\x7fELF"
-        except:
+        except Exception:
             return False
 
     def _check_suid_binaries(self, rootfs: Path) -> List[Vulnerability]:
@@ -251,7 +247,7 @@ class BinaryScanner(BaseScanner):
                     )
                     vulnerabilities.append(vuln)
 
-            except:
+            except Exception:
                 continue
 
         return vulnerabilities
@@ -333,7 +329,7 @@ class BinaryScanner(BaseScanner):
                 if func_name in result.stdout:
                     symbols.append(func_name)
 
-        except:
+        except Exception:
             pass
 
         return symbols
@@ -405,13 +401,13 @@ class BinaryScanner(BaseScanner):
             if result.returncode == 0:
                 import json
 
-                data = json.loads(result.stdout)
+                json.loads(result.stdout)
                 # Parse checksec output
                 return info
 
         except FileNotFoundError:
             pass
-        except:
+        except Exception:
             pass
 
         # Manual check with readelf
@@ -436,7 +432,7 @@ class BinaryScanner(BaseScanner):
             if "DYN (Shared object file)" in result2.stdout:
                 info["pie"] = True
 
-        except:
+        except Exception:
             pass
 
         return info
@@ -475,7 +471,7 @@ class BinaryScanner(BaseScanner):
                             vulnerabilities.append(vuln)
                             break
 
-                except:
+                except Exception:
                     continue
 
             # Check binaries with strings
@@ -501,7 +497,7 @@ class BinaryScanner(BaseScanner):
                             vulnerabilities.append(vuln)
                             break
 
-                except:
+                except Exception:
                     continue
 
         return vulnerabilities
@@ -558,7 +554,7 @@ class BinaryScanner(BaseScanner):
                 if match:
                     return match.group(1)
 
-        except:
+        except Exception:
             pass
 
         return None

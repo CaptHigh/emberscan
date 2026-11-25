@@ -21,8 +21,6 @@ to EmberScan's ``Vulnerability`` model.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from .backend import (
     BackendError,
     BackendUnavailable,

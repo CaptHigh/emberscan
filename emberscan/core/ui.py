@@ -192,7 +192,7 @@ class _UI:
                 sev = f.get("severity", "info")
                 c = _SEV_PLAIN_COLOR.get(sev, "") if _want_color() else ""
                 r = _RESET if c else ""
-                print(f"\n{c}[{sev.upper()}]{r} {f.get('title','')}")
+                print(f"\n{c}[{sev.upper()}]{r} {f.get('title', '')}")
                 if f.get("location"):
                     print(f"    {f['location']}")
                 if f.get("evidence"):
