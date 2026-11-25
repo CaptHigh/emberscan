@@ -40,6 +40,9 @@ jobs:
         run: flake8 emberscan tests --max-line-length=100
         
       - name: Type check with mypy
+        # Advisory (user-approved): the codebase is largely untyped with many
+        # pre-existing mypy findings; reported for information, not a blocker.
+        continue-on-error: true
         run: mypy emberscan --ignore-missing-imports
 
   # ===========================================================================
@@ -47,12 +50,22 @@ jobs:
   # ===========================================================================
   test:
     name: Test Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
-        
+        # Python 3.9 is not available on the ubuntu-latest (26.04) runner image,
+        # so that job runs on ubuntu-22.04 which still ships it.
+        include:
+          - python-version: '3.9'
+            os: ubuntu-22.04
+          - python-version: '3.10'
+            os: ubuntu-latest
+          - python-version: '3.11'
+            os: ubuntu-latest
+          - python-version: '3.12'
+            os: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
       
@@ -104,6 +117,9 @@ jobs:
         run: bandit -r emberscan -ll -ii
         
       - name: Check dependencies for vulnerabilities
+        # Advisory (user-approved): safety checks against an external DB and is
+        # deprecated; reported for information, not a merge blocker.
+        continue-on-error: true
         run: safety check
 
   # ===========================================================================

@@ -10,10 +10,8 @@ Analyzes firmware for cryptographic weaknesses:
 """
 
 import re
-import struct
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import List, Set
 
 from ..core.config import Config
 from ..core.logger import get_logger
@@ -249,7 +247,7 @@ class CryptoScanner(BaseScanner):
                 if "sha1WithRSAEncryption" in cert_info or "md5WithRSAEncryption" in cert_info:
                     vuln = self._create_vulnerability(
                         title="Weak Certificate Signature Algorithm",
-                        description=f"Certificate uses weak signature algorithm",
+                        description="Certificate uses weak signature algorithm",
                         severity=Severity.MEDIUM,
                         vuln_type=VulnerabilityType.WEAK_CRYPTO,
                         file_path=relative_path,

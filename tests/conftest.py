@@ -2,7 +2,6 @@
 Pytest configuration and fixtures for EmberScan tests.
 """
 
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -106,21 +105,17 @@ def mock_vulnerable_webapp(temp_dir):
     www_dir.mkdir()
 
     # PHP file with command injection
-    (www_dir / "admin.php").write_text(
-        """<?php
+    (www_dir / "admin.php").write_text("""<?php
     $cmd = $_GET['cmd'];
     system($cmd);  // Command injection!
     $password = "admin123";  // Hardcoded password
-    ?>"""
-    )
+    ?>""")
 
     # Config file with credentials
-    (www_dir / "config.php").write_text(
-        """<?php
+    (www_dir / "config.php").write_text("""<?php
     $db_password = "secret123";
     $api_key = "AKIA1234567890ABCDEF";
-    ?>"""
-    )
+    ?>""")
 
     return www_dir
 

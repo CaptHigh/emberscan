@@ -1,0 +1,24 @@
+[flake8]
+max-line-length = 100
+# E203/W503 conflict with black; E501 line length is owned by black (which the
+# CI also enforces via `black --check`).
+extend-ignore = E203, W503, E501
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    build,
+    dist,
+    workspace,
+    emulation_temp,
+    tests/samples
+per-file-ignores =
+    # Intentional module-level code before imports (env setup / sys.path / lazy
+    # native-lib guards), so E402 (import not at top) does not apply.
+    emberscan/cli.py: E402
+    emberscan/dynamic/qiling_backend.py: E402
+    emberscan/dynamic/unicorn_backend.py: E402
+    tests/conftest.py: E402
+    tests/test_dynamic.py: E402
+    tests/verify_multiarch.py: E402

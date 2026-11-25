@@ -11,8 +11,7 @@ Scans network services for vulnerabilities including:
 
 import socket
 import subprocess
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import defusedxml.ElementTree as ET
 
@@ -21,7 +20,6 @@ from ..core.logger import get_logger
 from ..core.models import (
     FirmwareInfo,
     ScanResult,
-    ScanStatus,
     Severity,
     Vulnerability,
     VulnerabilityType,
@@ -188,7 +186,7 @@ class NetworkScanner(BaseScanner):
                 if result == 0:
                     open_ports.append(port)
 
-            except:
+            except Exception:
                 continue
 
         logger.info(f"Found {len(open_ports)} open ports: {open_ports}")
@@ -251,7 +249,7 @@ class NetworkScanner(BaseScanner):
             sock.close()
             return banner.strip()
 
-        except:
+        except Exception:
             return ""
 
     def _parse_version(self, banner: str) -> str:
@@ -448,7 +446,7 @@ class NetworkScanner(BaseScanner):
                     timeout=5,
                 )
                 return result.returncode == 0
-        except:
+        except Exception:
             pass
 
         return False

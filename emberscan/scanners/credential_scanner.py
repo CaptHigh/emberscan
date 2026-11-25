@@ -9,13 +9,10 @@ Scans firmware for hardcoded credentials, API keys, and secrets:
 - Database credentials
 """
 
-import base64
 import hashlib
-import os
 import re
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 from ..core.config import Config
 from ..core.logger import get_logger
@@ -25,36 +22,193 @@ from .base import BaseScanner, ScannerRegistry
 logger = get_logger(__name__)
 
 
-# Patterns for credential detection
-CREDENTIAL_PATTERNS = [
-    # Passwords
-    (r'password\s*[=:]\s*["\']?([^"\'\s]{4,})["\']?', "password", Severity.HIGH),
-    (r'passwd\s*[=:]\s*["\']?([^"\'\s]{4,})["\']?', "password", Severity.HIGH),
-    (r'pwd\s*[=:]\s*["\']?([^"\'\s]{4,})["\']?', "password", Severity.MEDIUM),
-    (r'pass\s*[=:]\s*["\']?([^"\'\s]{4,})["\']?', "password", Severity.MEDIUM),
-    # API Keys
-    (r'api[_-]?key\s*[=:]\s*["\']?([a-zA-Z0-9_\-]{16,})["\']?', "api_key", Severity.HIGH),
-    (r'apikey\s*[=:]\s*["\']?([a-zA-Z0-9_\-]{16,})["\']?', "api_key", Severity.HIGH),
-    (r'secret[_-]?key\s*[=:]\s*["\']?([a-zA-Z0-9_\-]{16,})["\']?', "secret_key", Severity.CRITICAL),
-    # Tokens
-    (r'token\s*[=:]\s*["\']?([a-zA-Z0-9_\-]{16,})["\']?', "token", Severity.HIGH),
-    (r'auth[_-]?token\s*[=:]\s*["\']?([a-zA-Z0-9_\-]{16,})["\']?', "auth_token", Severity.HIGH),
-    (r'access[_-]?token\s*[=:]\s*["\']?([a-zA-Z0-9_\-]{16,})["\']?', "access_token", Severity.HIGH),
-    # AWS
-    (r"AKIA[0-9A-Z]{16}", "aws_access_key", Severity.CRITICAL),
+# High-precision patterns that match the secret itself (the value carries its
+# own structure), so they rarely false-positive and need no value validation.
+STANDALONE_PATTERNS = [
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "aws_access_key", Severity.CRITICAL),
     (
-        r'aws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*["\']?([a-zA-Z0-9/+=]{40})["\']?',
-        "aws_secret",
+        re.compile(r"-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"),
+        "private_key",
         Severity.CRITICAL,
     ),
-    # Database
-    (r"mysql://[^:]+:([^@]+)@", "mysql_password", Severity.HIGH),
-    (r"postgres://[^:]+:([^@]+)@", "postgres_password", Severity.HIGH),
-    (r"mongodb://[^:]+:([^@]+)@", "mongodb_password", Severity.HIGH),
-    # Private keys
-    (r"-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----", "private_key", Severity.CRITICAL),
-    (r"-----BEGIN PGP PRIVATE KEY BLOCK-----", "pgp_private_key", Severity.CRITICAL),
+    (re.compile(r"-----BEGIN PGP PRIVATE KEY BLOCK-----"), "pgp_private_key", Severity.CRITICAL),
+    (
+        re.compile(r"(?:ghp|gho|ghs|ghr|github_pat)_[0-9A-Za-z_]{20,}"),
+        "github_token",
+        Severity.HIGH,
+    ),
+    # user:password embedded in a connection URI
+    (
+        re.compile(
+            r"(?:mysql|postgres(?:ql)?|mongodb|redis|ftp|amqp)://" r"[^:@/\s]+:([^@\s/'\"]{3,})@"
+        ),
+        "db_password",
+        Severity.HIGH,
+    ),
 ]
+
+# keyword = "value" assignment patterns. The value is validated separately
+# (``_is_plausible_secret``) so we don't flag variable references, code tokens
+# or identifiers. Fields: (keyword alternation, cred_type, severity, min_len,
+# high_entropy) -- high_entropy means the value must look random (keys/tokens).
+ASSIGN_SPECS = [
+    (r"password|passwd", "password", Severity.HIGH, 4, False),
+    (r"passphrase", "passphrase", Severity.HIGH, 4, False),
+    (r"secret[_-]?key|secretkey|client[_-]?secret", "secret_key", Severity.CRITICAL, 8, True),
+    (r"api[_-]?key|apikey", "api_key", Severity.HIGH, 12, True),
+    (r"(?:auth|access|bearer)[_-]?token|access_?key", "token", Severity.HIGH, 12, True),
+    (r"aws[_-]?secret[_-]?access[_-]?key", "aws_secret", Severity.CRITICAL, 20, True),
+]
+
+# key[=:] value, where value is a "double"/'single' quoted literal or a bare
+# token. Capturing the *whole* quoted literal (not a delimiter-truncated
+# fragment) lets the validator see and reject things like "psk=${key}". The
+# \b stops matches inside words such as "bypass", "compass" or "keyboard".
+ASSIGN_PATTERNS = [
+    (
+        re.compile(
+            r"\b(?:" + kw + r")\b\s*[:=]\s*"
+            r"(?:\"([^\"\n]{" + str(mlen) + r",})\""
+            r"|'([^'\n]{" + str(mlen) + r",})'"
+            r"|([^\s'\"#,;)}\]]{" + str(mlen) + r",}))",
+            re.IGNORECASE,
+        ),
+        ctype,
+        sev,
+        mlen,
+        entropy,
+    )
+    for (kw, ctype, sev, mlen, entropy) in ASSIGN_SPECS
+]
+
+# Values that are obviously not real secrets.
+_CODE_TOKENS = {
+    "true",
+    "false",
+    "null",
+    "none",
+    "nil",
+    "undefined",
+    "yes",
+    "no",
+    "on",
+    "off",
+    "function",
+    "self",
+    "this",
+    "new",
+    "var",
+    "let",
+    "const",
+    "return",
+    "void",
+    "default",
+    "enable",
+    "enabled",
+    "disable",
+    "disabled",
+    "required",
+    "optional",
+    "string",
+    "integer",
+    "boolean",
+    "object",
+    "array",
+    "text",
+    "value",
+}
+# Values that are clearly placeholders, not real secrets. We deliberately do
+# NOT list the credential words themselves (password/secret/token/...) here:
+# real secrets routinely contain them (e.g. "MyPassword1", "root_secret_42"),
+# so matching them as substrings caused false negatives.
+_PLACEHOLDER_EXACT = {
+    "example",
+    "sample",
+    "test",
+    "testing",
+    "changeme",
+    "change_me",
+    "default",
+    "placeholder",
+    "none",
+    "null",
+    "your_password",
+    "password_here",
+    "enter_password",
+    "redacted",
+    "todo",
+    "tbd",
+    "n/a",
+    "na",
+    "xxx",
+    "yyy",
+    "zzz",
+}
+_PLACEHOLDER_SUBSTR = (
+    "example",
+    "changeme",
+    "placeholder",
+    "your_",
+    "yourpassword",
+    "redacted",
+    "xxxxx",
+    "foobar",
+    "dummy",
+    "<",
+    ">",
+    "lorem",
+)
+
+# File extensions that contain code (a bare identifier on the RHS is a variable
+# reference, not a literal secret) vs. data/config (RHS is a literal value).
+_CODE_SUFFIXES = {
+    ".sh",
+    ".bash",
+    ".py",
+    ".pl",
+    ".php",
+    ".lua",
+    ".js",
+    ".mjs",
+    ".ts",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".java",
+    ".rb",
+    ".go",
+    ".html",
+    ".htm",
+    ".tcl",
+    ".awk",
+}
+
+# Shell dialects: a *bare* (unquoted) RHS word is a literal value, not a
+# variable reference (shell references use $VAR / ${VAR}). So, unlike the other
+# languages above, PASSWORD=admin123 in a shell script is a real hardcoded
+# credential and must not be filtered out as an "identifier".
+_SHELL_SUFFIXES = {".sh", ".bash", ".ash", ".dash", ".ksh"}
+_SHELL_SHEBANG = ("/sh", "/ash", "/bash", "/dash", "/ksh", "busybox")
+_NONSHELL_SHEBANG = ("python", "perl", "lua", "node", "ruby", "php", "tclsh", "expect")
+
+# Directory names marking UI string / localization resources. Their
+# ``PASSWORD: "Wachtwoord"`` style entries are translation labels, not secrets.
+_LOCALE_DIR_NAMES = {
+    "locale",
+    "locales",
+    "i18n",
+    "l10n",
+    "nls",
+    "lang",
+    "langs",
+    "language",
+    "languages",
+    "translation",
+    "translations",
+    "intl",
+}
 
 # Common weak/default passwords
 WEAK_PASSWORDS = {
@@ -249,7 +403,7 @@ class CredentialScanner(BaseScanner):
                                         severity=Severity.CRITICAL,
                                         vuln_type=VulnerabilityType.HARDCODED_CREDENTIALS,
                                         file_path="etc/shadow",
-                                        evidence=f"Password is a common/weak password",
+                                        evidence="Password is a common/weak password",
                                         remediation="Use a strong, unique password",
                                     )
                                     vulnerabilities.append(vuln)
@@ -282,7 +436,7 @@ class CredentialScanner(BaseScanner):
 
                     if crypt.crypt(password, hash_str) == hash_str:
                         return password
-                except:
+                except Exception:
                     pass
 
             # SHA512 crypt
@@ -292,7 +446,7 @@ class CredentialScanner(BaseScanner):
 
                     if crypt.crypt(password, hash_str) == hash_str:
                         return password
-                except:
+                except Exception:
                     pass
 
             # Plain MD5
@@ -357,305 +511,164 @@ class CredentialScanner(BaseScanner):
 
         return vulnerabilities
 
+    @staticmethod
+    def _is_textual_file(file_path: Path) -> bool:
+        """Heuristic: is this a text file we should regex-scan?
+
+        Binaries (busybox and friends) read as text produce enormous numbers of
+        false "credential" matches, so we skip anything that is ELF or contains
+        NUL bytes in its first block. Those belong to the binary scanner's
+        strings-based path, not the credential regexes.
+        """
+        try:
+            with open(file_path, "rb") as fh:
+                head = fh.read(4096)
+        except OSError:
+            return False
+        if not head:
+            return False
+        if head[:4] == b"\x7fELF" or head[:2] in (b"MZ",) or head[:4] == b"\xca\xfe\xba\xbe":
+            return False
+        return b"\x00" not in head
+
     def _scan_file_for_credentials(self, file_path: Path, rootfs: Path) -> List[Vulnerability]:
-        """Scan a single file for credential patterns."""
+        """Scan a single *text* file for credential patterns."""
         vulnerabilities = []
-        relative_path = str(file_path.relative_to(rootfs))
 
-        # Skip common system binaries that contain help text, not real credentials
-        # These are standard Unix utilities that will have "password" in help strings
-        skip_binaries = {
-            "passwd",
-            "login",
-            "su",
-            "sudo",
-            "chpasswd",
-            "newusers",
-            "ssh",
-            "sshd",
-            "dropbear",
-            "telnetd",
-            "ftpd",
-            "busybox",
-            "ash",
-            "bash",
-            "sh",
-            "csh",
-            "zsh",
-            "useradd",
-            "usermod",
-            "userdel",
-            "groupadd",
-            "cmp",
-            "diff",
-            "grep",
-            "awk",
-            "sed",
-            "cat",
-            "ls",
-            "free",
-            "top",
-            "ps",
-            "mount",
-            "umount",
-            "df",
-            "openssl",
-            "curl",
-            "wget",
-        }
-
-        # Check if this is a known system binary
-        if file_path.name in skip_binaries:
+        if not self._is_textual_file(file_path):
             return vulnerabilities
-
-        # Also skip if the path indicates this is a standard system binary
-        binary_paths = {"usr/bin", "usr/sbin", "bin", "sbin"}
-        path_parts = relative_path.split("/")
-        if len(path_parts) >= 2:
-            parent_path = "/".join(path_parts[:-1])
-            if parent_path in binary_paths:
-                # Only scan scripts, not compiled binaries
-                try:
-                    # Check if it's a text file by looking at first bytes
-                    with open(file_path, "rb") as f:
-                        header = f.read(512)
-                        # Skip if it contains many null bytes (likely binary)
-                        null_count = header.count(b"\x00")
-                        if null_count > len(header) * 0.1:  # More than 10% null bytes
-                            return vulnerabilities
-                        # Check for ELF magic number
-                        if header.startswith(b"\x7fELF"):
-                            return vulnerabilities
-                except Exception:
-                    pass
 
         try:
             content = file_path.read_text(errors="ignore")
-
-            for pattern, cred_type, severity in CREDENTIAL_PATTERNS:
-                matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
-
-                for match in matches:
-                    credential = match.group(1) if match.lastindex else match.group(0)
-
-                    # Skip if already found
-                    cred_key = f"{relative_path}:{cred_type}:{credential[:20]}"
-                    if cred_key in self._found_credentials:
-                        continue
-                    self._found_credentials.add(cred_key)
-
-                    # Skip obvious false positives
-                    if self._is_false_positive(credential, cred_type):
-                        continue
-
-                    # Find line number
-                    line_num = content[: match.start()].count("\n") + 1
-
-                    vuln = self._create_vulnerability(
-                        title=f"Hardcoded {cred_type.replace('_', ' ').title()}",
-                        description=f"Found hardcoded {cred_type} in {file_path.name}",
-                        severity=severity,
-                        vuln_type=VulnerabilityType.HARDCODED_CREDENTIALS,
-                        file_path=relative_path,
-                        line_number=line_num,
-                        evidence=f"Pattern match: {match.group(0)[:50]}...",
-                        remediation="Remove hardcoded credentials and use secure configuration management",
-                    )
-                    vulnerabilities.append(vuln)
-
         except Exception as e:
-            logger.debug(f"Failed to scan {file_path}: {e}")
+            logger.debug(f"Failed to read {file_path}: {e}")
+            return vulnerabilities
+
+        try:
+            relative_path = str(file_path.relative_to(rootfs))
+        except Exception:
+            relative_path = str(file_path)
+
+        # Skip UI string / localization resources: their PASSWORD:"<word>"
+        # entries are translation labels, not credentials.
+        if any(part.lower() in _LOCALE_DIR_NAMES for part in Path(relative_path).parts):
+            return vulnerabilities
+
+        # A "reference language" is one where an unquoted bare word on the RHS
+        # is a variable/property reference, not a literal (JS, Python, Lua, ...).
+        # Shell is NOT one of those (bare words are literals there), so
+        # PASSWORD=admin123 in a shell script stays a real finding.
+        suffix = file_path.suffix.lower()
+        shebang = content[:80].split("\n", 1)[0] if content.startswith("#!") else ""
+        is_shell = suffix in _SHELL_SUFFIXES or (
+            bool(shebang)
+            and any(s in shebang for s in _SHELL_SHEBANG)
+            and not any(s in shebang for s in _NONSHELL_SHEBANG)
+        )
+        ref_lang = (suffix in _CODE_SUFFIXES or bool(shebang)) and not is_shell
+
+        def _emit(cred_type, severity, evidence, start):
+            line_num = content[:start].count("\n") + 1
+            vulnerabilities.append(
+                self._create_vulnerability(
+                    title=f"Hardcoded {cred_type.replace('_', ' ').title()}",
+                    description=f"Found hardcoded {cred_type} in {file_path.name}",
+                    severity=severity,
+                    vuln_type=VulnerabilityType.HARDCODED_CREDENTIALS,
+                    file_path=relative_path,
+                    line_number=line_num,
+                    evidence=evidence,
+                    confidence=0.75,
+                    remediation="Remove hardcoded credentials; use secure/externalised "
+                    "configuration or a secrets store.",
+                )
+            )
+
+        # 1. High-precision standalone secrets (keys, tokens, URI passwords).
+        for rx, cred_type, severity in STANDALONE_PATTERNS:
+            for m in rx.finditer(content):
+                value = m.group(1) if m.lastindex else m.group(0)
+                key = f"{relative_path}:{cred_type}:{value[:24]}"
+                if key in self._found_credentials:
+                    continue
+                self._found_credentials.add(key)
+                _emit(cred_type, severity, f"{m.group(0)[:60]}", m.start())
+
+        # 2. keyword = value assignments, with the value validated.
+        for rx, cred_type, severity, min_len, high_entropy in ASSIGN_PATTERNS:
+            for m in rx.finditer(content):
+                # Skip shell/template parameter expansions such as
+                # ${password:+...} or {{password}} -- the ':' there is an
+                # expansion operator, not an assignment.
+                if content[max(0, m.start() - 2) : m.start()].endswith("{"):
+                    continue
+                dq, sq, bare = m.group(1), m.group(2), m.group(3)
+                if dq is not None:
+                    value, quoted = dq, True
+                elif sq is not None:
+                    value, quoted = sq, True
+                else:
+                    value, quoted = (bare or ""), False
+                value = value.strip()
+                if not self._is_plausible_secret(value, quoted, high_entropy, ref_lang):
+                    continue
+                key = f"{relative_path}:{cred_type}:{value[:24]}"
+                if key in self._found_credentials:
+                    continue
+                self._found_credentials.add(key)
+                shown = m.group(0)[:60]
+                _emit(cred_type, severity, f"{shown}", m.start())
 
         return vulnerabilities
 
-    def _is_false_positive(self, credential: str, cred_type: str) -> bool:
-        """Check if credential is likely a false positive."""
-        cred_lower = credential.lower()
+    def _is_plausible_secret(
+        self, value: str, quoted: bool, high_entropy: bool, ref_lang: bool
+    ) -> bool:
+        """Decide whether an assignment value is a real literal secret.
 
-        # Skip placeholders and documentation text
-        placeholders = [
-            "your_password",
-            "enter_password",
-            "password_here",
-            "xxx",
-            "yyy",
-            "zzz",
-            "example",
-            "sample",
-            "test",
-            "changeme",
-            "placeholder",
-            "insert",
-            "todo",
-        ]
-
-        if any(p in cred_lower for p in placeholders):
-            return True
-
-        # Skip very short credentials
-        if len(credential) < 4:
-            return True
-
-        # Skip if all same character
-        if len(set(credential)) == 1:
-            return True
-
-        # Skip common config patterns
-        if credential.startswith("$") and cred_type == "password":
-            return True  # Variable reference
-
-        # Skip help text / UI strings commonly found in binaries
-        # These are prompts, error messages, and UI labels, not actual credentials
-        help_text_patterns = [
-            # Password prompts and help text
-            "retype",
-            "re-type",
-            "reenter",
-            "re-enter",
-            "confirm",
-            "incorrect",
-            "invalid",
-            "wrong",
-            "error",
-            "failed",
-            "enter",
-            "input",
-            "type",
-            "provide",
-            "specify",
-            "new",
-            "old",
-            "current",
-            "previous",
-            "passwords",
-            "must",
-            "should",
-            "cannot",
-            "required",
-            "minimum",
-            "maximum",
-            "length",
-            "character",
-            "match",
-            "matches",
-            "matching",
-            "mismatch",
-            "expire",
-            "expired",
-            "expiration",
-            "expires",
-            "change",
-            "changed",
-            "changing",
-            "reset",
-            "authentication",
-            "authenticate",
-            "authenticating",
-            "login",
-            "logon",
-            "logout",
-            "logged",
-            "please",
-            "press",
-            "click",
-            "select",
-            "prompt",
-            "dialog",
-            "message",
-            "warning",
-            "success",
-            "successful",
-            "successfully",
-            "denied",
-            "rejected",
-            "refused",
-            "forbidden",
-            "empty",
-            "blank",
-            "missing",
-            "null",
-            "none",
-            "usage",
-            "help",
-            "info",
-            "hint",
-            "option",
-            "encryption",
-            "encrypted",
-            "decrypt",
-            "verify",
-            "verified",
-            "verification",
-            "enabled",
-            "disabled",
-            "enable",
-            "disable",
-            "set",
-            "unset",
-            "clear",
-            "cleared",
-        ]
-
-        if any(pattern in cred_lower for pattern in help_text_patterns):
-            return True
-
-        # Skip if it looks like a sentence or description (contains spaces after splitting)
-        if " " in credential.strip():
-            return True
-
-        # Skip common UI/shell command help patterns
-        # These typically appear as "password: <description>" in binary strings
-        if cred_type == "password":
-            # Check if the "credential" looks like help text syntax
-            if any(
-                credential.startswith(prefix)
-                for prefix in [
-                    "Password",
-                    "Passwords",
-                    "Re",
-                    "New",
-                    "Old",
-                    "Enter",
-                    "Type",
-                    "Invalid",
-                    "Incorrect",
-                    "Wrong",
-                    "Bad",
-                    "Your",
-                    "The",
-                    "A ",
-                    "An ",
-                ]
-            ):
-                return True
-
-        # Skip generic programming/config tokens that aren't real secrets
-        generic_tokens = [
-            "true",
-            "false",
-            "null",
-            "none",
-            "undefined",
-            "string",
-            "integer",
-            "boolean",
-            "array",
-            "object",
-            "default",
-            "value",
-            "name",
-            "path",
-            "file",
-            "dir",
-            "required",
-            "optional",
-            "deprecated",
-        ]
-
-        if cred_lower in generic_tokens:
-            return True
-
-        return False
+        Rejects variable references ($VAR, ${x}), template/interpolation, code
+        expressions (calls, property access), placeholders and obvious code
+        tokens. In *reference languages* (JS/Python/Lua/..., not shell) an
+        unquoted bare identifier is a variable reference, not a literal, so it
+        is rejected too. It deliberately does NOT reject a value merely for
+        containing the word "password"/"secret"/"token" -- real secrets do.
+        """
+        v = value.strip().strip("\"'")
+        if len(v) < 4 or len(set(v)) == 1:
+            return False
+        low = v.lower()
+        if low in _CODE_TOKENS or low in _PLACEHOLDER_EXACT:
+            return False
+        if any(sub in low for sub in _PLACEHOLDER_SUBSTR):
+            return False
+        # variable reference / template / interpolation / expression
+        if v[0] in "$%@&<>{}([":
+            return False
+        if any(tok in v for tok in ("${", "$(", "%(", "{{", "}}", "</", "/>")):
+            return False
+        # function call, property access or indexing -> code, not a literal
+        if any(c in v for c in "()[]"):
+            return False
+        # nested assignment fragment (e.g. psk=${key} truncated to "psk=\\") or a
+        # trailing escape backslash left by a truncated quoted string
+        if re.match(r"^[A-Za-z_]\w*=", v) or v.endswith("\\"):
+            return False
+        # format specifiers / ellipsis placeholders
+        if "%s" in low or "%d" in low or "%x" in low or "..." in v:
+            return False
+        # In a reference language, an unquoted RHS that is a plain identifier or
+        # a dotted property chain is a reference to another symbol, not a secret.
+        # (Shell is excluded: a bare word there is a literal value.)
+        if ref_lang and not quoted:
+            if re.fullmatch(r"[A-Za-z_]\w*", v) or re.fullmatch(r"[A-Za-z_][\w.]*", v):
+                return False
+        # Keys/tokens must actually look random (mix of character classes),
+        # which rules out dictionary-word identifiers like getAuthToken.
+        if high_entropy:
+            classes = sum(bool(re.search(p, v)) for p in (r"[a-z]", r"[A-Z]", r"\d"))
+            if classes < 2:
+                return False
+        return True
 
     def _find_private_keys(self, rootfs: Path) -> List[Vulnerability]:
         """Find private key files."""

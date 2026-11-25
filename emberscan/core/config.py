@@ -34,11 +34,52 @@ class QEMUConfig:
 
 
 @dataclass
+class EmulationConfig:
+    """Dynamic (per-binary) emulation-analysis configuration.
+
+    This drives the EmulationScanner: it loads individual binaries from the
+    extracted rootfs, emulates their code, and runs the dynamic detectors. It
+    is independent of the full-system QEMU settings above.
+    """
+
+    enabled: bool = True
+    # execution backend: "auto" (Qiling if present, else Unicorn), "qiling",
+    # "unicorn", or "mock" (testing only).
+    backend: str = "auto"
+    # sysroot for shared-library resolution. None => the rootfs dir (when
+    # target is a directory) or the binary's own parent directory.
+    rootfs: Optional[str] = None
+    # detectors to run; None => all registered ones.
+    detectors: Optional[List[str]] = None
+    # cap on binaries emulated per firmware (highest attack-surface first).
+    max_binaries: int = 25
+    # only emulate binaries whose name contains one of these substrings.
+    include: Optional[List[str]] = None
+    # per-binary emulation limits.
+    timeout_per_binary: int = 30
+    max_instructions: int = 2_000_000
+    # emit per-access memory events (needed for heap red-zone checks; costs
+    # performance under Qiling — disable for a faster, call-only run).
+    mem_events: bool = True
+    # overall wall-clock budget for the whole emulation pass (0 => use
+    # scanner.timeout_per_scan).
+    total_timeout: int = 0
+
+
+@dataclass
 class ScannerConfig:
     """Scanner configuration."""
 
     enabled_scanners: List[str] = field(
-        default_factory=lambda: ["web", "network", "binary", "cve", "credentials", "crypto"]
+        default_factory=lambda: [
+            "web",
+            "network",
+            "binary",
+            "cve",
+            "credentials",
+            "crypto",
+            "emulation",
+        ]
     )
     parallel_scans: int = 4
     timeout_per_scan: int = 600
@@ -81,6 +122,7 @@ class Config:
 
     # Sub-configurations
     qemu: QEMUConfig = field(default_factory=QEMUConfig)
+    emulation: EmulationConfig = field(default_factory=EmulationConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     extractor: ExtractorConfig = field(default_factory=ExtractorConfig)
     reporter: ReporterConfig = field(default_factory=ReporterConfig)
@@ -166,12 +208,14 @@ class Config:
     def _from_dict(cls, data: Dict) -> "Config":
         """Create Config instance from dictionary."""
         qemu_data = data.pop("qemu", {})
+        emulation_data = data.pop("emulation", {})
         scanner_data = data.pop("scanner", {})
         extractor_data = data.pop("extractor", {})
         reporter_data = data.pop("reporter", {})
 
         return cls(
             qemu=QEMUConfig(**qemu_data) if qemu_data else QEMUConfig(),
+            emulation=EmulationConfig(**emulation_data) if emulation_data else EmulationConfig(),
             scanner=ScannerConfig(**scanner_data) if scanner_data else ScannerConfig(),
             extractor=ExtractorConfig(**extractor_data) if extractor_data else ExtractorConfig(),
             reporter=ReporterConfig(**reporter_data) if reporter_data else ReporterConfig(),

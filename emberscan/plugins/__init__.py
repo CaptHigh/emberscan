@@ -17,13 +17,12 @@ Plugin Structure:
 
 import importlib
 import importlib.util
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
 from ..core.config import Config
-from ..core.exceptions import PluginExecutionError, PluginLoadError
+from ..core.exceptions import PluginLoadError
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)

@@ -6,9 +6,11 @@ Usage:
     emberscan scan <firmware> [options]
     emberscan extract <firmware> [options]
     emberscan emulate <firmware> [options]
+    emberscan analyze <binary|rootfs> [options]
     emberscan report <session-id> [options]
     emberscan spi-read [options]
     emberscan check-deps
+    emberscan install-deps
     emberscan --version
 """
 
@@ -16,54 +18,67 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+
+# Quiet Unicorn's direct-to-stderr "register accessing" deprecation notice
+# before any emulation backend (Unicorn/Qiling) spins up.
+os.environ.setdefault("UC_IGNORE_REG_BREAK", "1")
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from emberscan import __version__
 from emberscan.core.config import Config
-from emberscan.core.logger import get_logger, setup_logging
+from emberscan.core.logger import setup_logging
 from emberscan.core.scanner import EmberScanner
+from emberscan.core.ui import SEVERITY_ORDER, ui
 from emberscan.emulators.qemu_manager import QEMUManager
 from emberscan.extractors.firmware_extractor import FirmwareExtractor, SPIExtractor
-from emberscan.utils import check_dependencies, print_dependency_status
+from emberscan.utils import install_python_deps, print_dependency_status
 
 
-# ANSI Colors
+# Minimal ANSI codes kept only for a couple of plain-text spots; all rich
+# presentation goes through emberscan.core.ui.
 class Colors:
-    HEADER = "\033[95m"
-    BLUE = "\033[94m"
     CYAN = "\033[96m"
     GREEN = "\033[92m"
     WARNING = "\033[93m"
     FAIL = "\033[91m"
+    BLUE = "\033[94m"
     END = "\033[0m"
     BOLD = "\033[1m"
 
 
-BANNER = f"""
-{Colors.CYAN}╔═══════════════════════════════════════════════════════════════╗
-║                                                                  ║
-║   {Colors.GREEN}███████╗███╗   ███╗██████╗ ███████╗██████╗ {Colors.CYAN}                  ║
-║   {Colors.GREEN}██╔════╝████╗ ████║██╔══██╗██╔════╝██╔══██╗{Colors.CYAN}                  ║
-║   {Colors.GREEN}█████╗  ██╔████╔██║██████╔╝█████╗  ██████╔╝{Colors.CYAN}                  ║
-║   {Colors.GREEN}██╔══╝  ██║╚██╔╝██║██╔══██╗██╔══╝  ██╔══██╗{Colors.CYAN}                  ║
-║   {Colors.GREEN}███████╗██║ ╚═╝ ██║██████╔╝███████╗██║  ██║{Colors.CYAN}                  ║
-║   {Colors.GREEN}╚══════╝╚═╝     ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝{Colors.CYAN}                  ║
-║                                                                  ║
-║   {Colors.WARNING}███████╗ ██████╗ █████╗ ███╗   ██╗{Colors.CYAN}                        ║
-║   {Colors.WARNING}██╔════╝██╔════╝██╔══██╗████╗  ██║{Colors.CYAN}                        ║
-║   {Colors.WARNING}███████╗██║     ███████║██╔██╗ ██║{Colors.CYAN}                        ║
-║   {Colors.WARNING}╚════██║██║     ██╔══██║██║╚██╗██║{Colors.CYAN}                        ║
-║   {Colors.WARNING}███████║╚██████╗██║  ██║██║ ╚████║{Colors.CYAN}                        ║
-║   {Colors.WARNING}╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝{Colors.CYAN}                        ║
-║                                                                  ║
-║   {Colors.END}Embedded Hardware Firmware Security Scanner{Colors.CYAN}                  ║
-║   {Colors.END}Version: {__version__}{Colors.CYAN}                                              ║
-║                                                                  ║
-╚═══════════════════════════════════════════════════════════════╝{Colors.END}
-"""
+def _vulns_to_rows(vulns):
+    """Convert Vulnerability objects to the dict rows the UI table expects,
+    sorted most-severe first."""
+    order = {s: i for i, s in enumerate(SEVERITY_ORDER)}
+    rows = []
+    for v in sorted(vulns, key=lambda x: order.get(_sev(x), 9)):
+        loc = getattr(v, "file_path", "") or ""
+        fn = getattr(v, "function_name", "") or ""
+        if fn:
+            loc = f"{loc} ({fn})" if loc else fn
+        vt = getattr(v, "vuln_type", None)
+        occ = getattr(v, "occurrences", 1) or 1
+        extra = getattr(v, "extra_locations", []) or []
+        if occ > 1:
+            more = len(extra)
+            loc = (loc or "(multiple)") + f"  (+{more} more file{'s' if more != 1 else ''})"
+        rows.append(
+            {
+                "severity": _sev(v),
+                "vuln_type": getattr(vt, "value", "") if vt is not None else "",
+                "title": getattr(v, "title", ""),
+                "location": loc,
+                "evidence": getattr(v, "evidence", "") or "",
+            }
+        )
+    return rows
+
+
+def _sev(v):
+    s = getattr(v, "severity", None)
+    return getattr(s, "value", s) or "info"
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -78,8 +93,11 @@ Examples:
   emberscan scan firmware.bin --scanners web,network --output ./reports
   emberscan extract firmware.bin --output ./extracted
   emberscan emulate firmware.bin --http-port 8080
+  emberscan analyze ./extracted/squashfs-root --detectors taint,memory_safety
+  emberscan analyze ./bin/httpd --backend qiling
   emberscan spi-read --programmer ch341a_spi --output dump.bin
   emberscan check-deps
+  emberscan install-deps
         """,
     )
 
@@ -153,13 +171,58 @@ Examples:
     )
     emulate_parser.add_argument("--memory", type=int, default=256, help="RAM in MB (default: 256)")
     emulate_parser.add_argument(
-        "--debug", action="store_true", help="Enable GDB server on port 1234 (firmware runs immediately, attach with 'target remote localhost:1234')"
+        "--debug", action="store_true", help="Enable GDB debugging (port 1234)"
     )
-    emulate_parser.add_argument(
-        "--display",
-        choices=["none", "gtk", "sdl", "curses", "console"],
-        default="none",
-        help="Display mode: none (headless), gtk/sdl (GUI window), curses (terminal), console (serial output)",
+
+    # =========================================================================
+    # Analyze command (per-binary emulation + dynamic detectors)
+    # =========================================================================
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help="Emulate binaries and run dynamic vulnerability detectors",
+    )
+    analyze_parser.add_argument(
+        "target", help="Path to a single binary or an extracted rootfs directory"
+    )
+    analyze_parser.add_argument(
+        "--rootfs",
+        help="Sysroot for shared-library resolution (default: the rootfs dir, "
+        "or the binary's parent directory)",
+        default=None,
+    )
+    analyze_parser.add_argument(
+        "--backend",
+        choices=["auto", "qiling", "unicorn"],
+        default="auto",
+        help="Emulation backend (default: auto)",
+    )
+    analyze_parser.add_argument(
+        "--arch",
+        choices=["mipsel", "mips", "arm", "aarch64", "x86", "x86_64"],
+        default=None,
+        help="Force architecture (needed only for raw/bare-metal blobs)",
+    )
+    analyze_parser.add_argument(
+        "--detectors",
+        default=None,
+        help="Comma list: memory_safety,taint,info_leak,weak_code (default: all)",
+    )
+    analyze_parser.add_argument(
+        "--max-binaries",
+        type=int,
+        default=25,
+        help="Max binaries to emulate when target is a rootfs (default: 25)",
+    )
+    analyze_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        help="Per-binary emulation timeout in seconds (default: 30)",
+    )
+    analyze_parser.add_argument(
+        "--no-mem-events",
+        action="store_true",
+        help="Disable per-access memory events (faster; skips heap red-zone checks)",
     )
 
     # =========================================================================
@@ -185,7 +248,18 @@ Examples:
     # =========================================================================
     # Check dependencies command
     # =========================================================================
-    deps_parser = subparsers.add_parser("check-deps", help="Check installed dependencies")
+    subparsers.add_parser("check-deps", help="Check installed dependencies")
+
+    # =========================================================================
+    # Install dependencies command
+    # =========================================================================
+    install_parser = subparsers.add_parser(
+        "install-deps",
+        help="Install the Python emulation libraries (unicorn/capstone/keystone/qiling)",
+    )
+    install_parser.add_argument(
+        "--no-pip-upgrade", action="store_true", help="Do not upgrade pip first"
+    )
 
     # =========================================================================
     # Download kernels command
@@ -199,113 +273,13 @@ Examples:
     return parser
 
 
-def _detect_arch_from_rootfs(rootfs_path: Path) -> Optional["Architecture"]:
-    """
-    Detect architecture by examining ELF binaries in the extracted rootfs.
-
-    Returns the detected Architecture or None if detection fails.
-    """
-    import struct
-
-    from emberscan.core.models import Architecture, Endianness
-
-    # Common binary locations to check
-    check_paths = [
-        "bin/busybox",
-        "bin/sh",
-        "usr/bin/busybox",
-        "sbin/init",
-        "lib/libc.so.0",
-        "lib/libc.so.6",
-        "usr/lib/libc.so.0",
-    ]
-
-    # ELF machine type mapping
-    elf_arch_map = {
-        0x03: Architecture.X86,
-        0x08: "MIPS",  # Need to check endianness
-        0x14: Architecture.PPC,
-        0x28: Architecture.ARM,
-        0x3E: Architecture.X86_64,
-        0xB7: Architecture.ARM64,
-    }
-
-    for check_path in check_paths:
-        elf_path = rootfs_path / check_path
-        if not elf_path.exists():
-            continue
-
-        try:
-            with open(elf_path, "rb") as f:
-                header = f.read(52)
-
-                # Check ELF magic
-                if header[:4] != b"\x7fELF":
-                    continue
-
-                # Get endianness (byte 5)
-                endian = Endianness.LITTLE if header[5] == 1 else Endianness.BIG
-
-                # Get machine type (bytes 18-19)
-                if endian == Endianness.LITTLE:
-                    machine = struct.unpack("<H", header[18:20])[0]
-                else:
-                    machine = struct.unpack(">H", header[18:20])[0]
-
-                arch = elf_arch_map.get(machine)
-                if arch == "MIPS":
-                    # Determine MIPS variant from endianness
-                    arch = (
-                        Architecture.MIPS_LE
-                        if endian == Endianness.LITTLE
-                        else Architecture.MIPS_BE
-                    )
-
-                if arch and arch != Architecture.UNKNOWN:
-                    return arch
-
-        except (IOError, struct.error):
-            continue
-
-    return None
-
-
 def cmd_scan(args, config: Config):
     """Execute scan command."""
-    logger = get_logger("cli")
 
     # Validate firmware path
     firmware_path = Path(args.firmware)
     if not firmware_path.exists():
-        print(f"{Colors.FAIL}Error: Firmware file not found: {args.firmware}{Colors.END}")
-        sys.exit(1)
-
-    if firmware_path.is_dir():
-        print(f"{Colors.FAIL}Error: '{args.firmware}' is a directory, not a file{Colors.END}")
-        print(f"  Use 'emberscan emulate' command if you want to emulate an extracted rootfs")
-        sys.exit(1)
-
-    # Check file is readable and has content
-    try:
-        file_size = firmware_path.stat().st_size
-        if file_size == 0:
-            print(f"{Colors.FAIL}Error: Firmware file is empty: {args.firmware}{Colors.END}")
-            sys.exit(1)
-
-        # Quick sanity check - read first few bytes
-        with open(firmware_path, "rb") as f:
-            header = f.read(16)
-            if len(header) < 16:
-                print(
-                    f"{Colors.FAIL}Error: Firmware file too small ({file_size} bytes){Colors.END}"
-                )
-                sys.exit(1)
-
-    except PermissionError:
-        print(f"{Colors.FAIL}Error: Permission denied reading: {args.firmware}{Colors.END}")
-        sys.exit(1)
-    except IOError as e:
-        print(f"{Colors.FAIL}Error: Cannot read firmware file: {e}{Colors.END}")
+        ui.error(f"Firmware file not found: {args.firmware}")
         sys.exit(1)
 
     # Parse scanners
@@ -318,9 +292,15 @@ def cmd_scan(args, config: Config):
         config.reporter.output_formats = [f.strip() for f in args.format.split(",")]
     config.reporter.output_dir = args.output
 
-    print(f"\n{Colors.CYAN}[*] Starting firmware security scan...{Colors.END}")
-    print(f"    Target: {firmware_path}")
-    print(f"    Output: {args.output}")
+    ui.kv_panel(
+        "Scan",
+        [
+            ("target", firmware_path),
+            ("size", f"{firmware_path.stat().st_size:,} bytes"),
+            ("output", args.output),
+            ("mode", "static-only" if args.static_only else "static + emulation"),
+        ],
+    )
 
     try:
         scanner = EmberScanner(config)
@@ -329,8 +309,10 @@ def cmd_scan(args, config: Config):
         deps = scanner.check_dependencies()
         missing = [k for k, v in deps.items() if not v]
         if missing:
-            print(f"\n{Colors.WARNING}Warning: Missing tools: {', '.join(missing)}{Colors.END}")
-            print("Some scans may be limited. Run 'emberscan check-deps' for details.\n")
+            ui.warn(
+                f"Missing optional tools: {', '.join(missing)} "
+                "(some scans limited; see 'emberscan check-deps')"
+            )
 
         # Run scan
         session = scanner.scan_firmware(
@@ -341,74 +323,38 @@ def cmd_scan(args, config: Config):
             generate_report=not args.no_report,
         )
 
-        # Print summary
-        summary = session.get_summary()
-
-        print(f"\n{Colors.GREEN}{'='*60}{Colors.END}")
-        print(f"{Colors.BOLD}Scan Complete: {session.name}{Colors.END}")
-        print(f"{'='*60}")
-
-        print(f"\n{Colors.CYAN}Findings Summary:{Colors.END}")
-        print(f"  {Colors.FAIL}CRITICAL: {summary['by_severity']['critical']}{Colors.END}")
-        print(f"  {Colors.WARNING}HIGH:     {summary['by_severity']['high']}{Colors.END}")
-        print(f"  {Colors.WARNING}MEDIUM:   {summary['by_severity']['medium']}{Colors.END}")
-        print(f"  {Colors.BLUE}LOW:      {summary['by_severity']['low']}{Colors.END}")
-        print(f"  INFO:    {summary['by_severity']['info']}")
-        print(f"\n  Total:   {summary['total_vulnerabilities']}")
-
-        if summary["duration"]:
-            print(f"\n  Duration: {summary['duration']:.1f} seconds")
-
-        # Display top vulnerabilities in terminal
-        all_vulns = session.all_vulnerabilities
-        if all_vulns:
-            # Sort by severity (critical first)
-            severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-            sorted_vulns = sorted(
-                all_vulns, key=lambda v: severity_order.get(v.severity.value.lower(), 5)
+        # Target / firmware summary
+        fw = session.firmware
+        if fw is not None:
+            ui.blank()
+            ui.kv_panel(
+                "Firmware",
+                [
+                    ("vendor", fw.vendor or "unknown"),
+                    ("model", fw.name or "unknown"),
+                    ("device", fw.device_type or "unknown"),
+                    ("version", fw.version or "unknown"),
+                    ("arch", getattr(fw.architecture, "value", "unknown")),
+                    ("endianness", getattr(fw.endianness, "value", "unknown")),
+                    ("filesystem", getattr(fw.filesystem_type, "value", "unknown")),
+                ],
+                border="magenta",
             )
 
-            # Show top vulnerabilities
-            print(f"\n{Colors.CYAN}Top Vulnerabilities:{Colors.END}")
-            shown_count = 0
-            max_to_show = 10
+        # Findings
+        summary = session.get_summary()
+        ui.blank()
+        ui.rule("Findings")
+        ui.severity_summary(summary["by_severity"], summary["total_vulnerabilities"])
+        ui.blank()
+        ui.findings_table(_vulns_to_rows(session.all_vulnerabilities))
 
-            for vuln in sorted_vulns:
-                if shown_count >= max_to_show:
-                    remaining = len(sorted_vulns) - shown_count
-                    if remaining > 0:
-                        print(
-                            f"\n  ... and {remaining} more vulnerabilities (see report for details)"
-                        )
-                    break
+        if summary["duration"]:
+            ui.blank()
+            ui.info(f"Completed in {summary['duration']:.1f}s")
 
-                severity_color = {
-                    "critical": Colors.FAIL,
-                    "high": Colors.WARNING,
-                    "medium": Colors.WARNING,
-                    "low": Colors.BLUE,
-                    "info": Colors.END,
-                }.get(vuln.severity.value.lower(), Colors.END)
-
-                print(
-                    f"\n  [{severity_color}{vuln.severity.value.upper()}{Colors.END}] {vuln.title}"
-                )
-                if vuln.file_path:
-                    print(f"    File: {vuln.file_path}")
-                if vuln.description:
-                    # Truncate long descriptions
-                    desc = (
-                        vuln.description[:100] + "..."
-                        if len(vuln.description) > 100
-                        else vuln.description
-                    )
-                    print(f"    {desc}")
-                shown_count += 1
-
-        # Show absolute path for clarity
-        report_path = Path(args.output).absolute() / session.id
         if not args.no_report:
-            print(f"\n{Colors.GREEN}Reports saved to: {report_path}{Colors.END}")
+            ui.success(f"Reports saved to: {args.output}/{session.report_slug}/")
 
         # Exit code based on findings
         if summary["by_severity"]["critical"] > 0:
@@ -417,42 +363,10 @@ def cmd_scan(args, config: Config):
             sys.exit(1)
 
     except KeyboardInterrupt:
-        print(f"\n{Colors.WARNING}Scan interrupted by user{Colors.END}")
+        ui.warn("Scan interrupted by user")
         sys.exit(130)
     except Exception as e:
-        from emberscan.core.exceptions import (
-            EmulationError,
-            EncryptedFirmwareError,
-            ExtractionError,
-            FilesystemExtractionError,
-            ScannerError,
-            UnsupportedFirmwareError,
-        )
-
-        # Provide specific helpful messages for common errors
-        if isinstance(e, FilesystemExtractionError):
-            print(f"\n{Colors.FAIL}Extraction Failed: {e}{Colors.END}")
-            print(f"\n{Colors.WARNING}Troubleshooting tips:{Colors.END}")
-            print("  1. Ensure 'binwalk' is installed with all extraction tools")
-            print("  2. Try running: 'sudo apt install binwalk squashfs-tools jefferson'")
-            print("  3. Check if the firmware uses a proprietary filesystem")
-            print("  4. Use '--static-only' flag to skip extraction if analyzing raw data")
-        elif isinstance(e, EncryptedFirmwareError):
-            print(f"\n{Colors.FAIL}Encrypted Firmware: {e}{Colors.END}")
-            print(f"\n{Colors.WARNING}The firmware appears to be encrypted.{Colors.END}")
-            print("  Consider using vendor-specific decryption tools or keys.")
-        elif isinstance(e, UnsupportedFirmwareError):
-            print(f"\n{Colors.FAIL}Unsupported Firmware: {e}{Colors.END}")
-        elif isinstance(e, ExtractionError):
-            print(f"\n{Colors.FAIL}Extraction Error: {e}{Colors.END}")
-        elif isinstance(e, EmulationError):
-            print(f"\n{Colors.FAIL}Emulation Error: {e}{Colors.END}")
-            print(f"\n{Colors.WARNING}Use '--static-only' flag to skip emulation{Colors.END}")
-        elif isinstance(e, ScannerError):
-            print(f"\n{Colors.FAIL}Scanner Error: {e}{Colors.END}")
-        else:
-            print(f"\n{Colors.FAIL}Scan failed: {e}{Colors.END}")
-
+        ui.error(f"Scan failed: {e}")
         if args.debug:
             import traceback
 
@@ -466,19 +380,6 @@ def cmd_extract(args, config: Config):
 
     if not firmware_path.exists():
         print(f"{Colors.FAIL}Error: File not found: {args.firmware}{Colors.END}")
-        sys.exit(1)
-
-    if firmware_path.is_dir():
-        print(f"{Colors.FAIL}Error: '{args.firmware}' is a directory, not a file{Colors.END}")
-        sys.exit(1)
-
-    # Check file is readable
-    try:
-        if firmware_path.stat().st_size == 0:
-            print(f"{Colors.FAIL}Error: Firmware file is empty{Colors.END}")
-            sys.exit(1)
-    except PermissionError:
-        print(f"{Colors.FAIL}Error: Permission denied reading: {args.firmware}{Colors.END}")
         sys.exit(1)
 
     extractor = FirmwareExtractor(config)
@@ -509,28 +410,9 @@ def cmd_extract(args, config: Config):
 
     try:
         rootfs = extractor.extract(str(firmware_path), args.output)
-        print(f"\n{Colors.GREEN}Extraction complete: {Path(rootfs).absolute()}{Colors.END}")
+        print(f"\n{Colors.GREEN}Extraction complete: {rootfs}{Colors.END}")
     except Exception as e:
-        from emberscan.core.exceptions import (
-            EncryptedFirmwareError,
-            FilesystemExtractionError,
-            UnsupportedFirmwareError,
-        )
-
-        if isinstance(e, FilesystemExtractionError):
-            print(f"\n{Colors.FAIL}Extraction Failed: {e}{Colors.END}")
-            print(f"\n{Colors.WARNING}Troubleshooting tips:{Colors.END}")
-            print("  1. Ensure 'binwalk' is installed: apt install binwalk")
-            print("  2. Install filesystem tools: apt install squashfs-tools")
-            print("  3. For JFFS2: pip install jefferson")
-            print("  4. The firmware may use a proprietary or encrypted filesystem")
-        elif isinstance(e, EncryptedFirmwareError):
-            print(f"\n{Colors.FAIL}Encrypted Firmware Detected{Colors.END}")
-            print(f"  The firmware appears to be encrypted: {e}")
-        elif isinstance(e, UnsupportedFirmwareError):
-            print(f"\n{Colors.FAIL}Unsupported Firmware Format: {e}{Colors.END}")
-        else:
-            print(f"\n{Colors.FAIL}Extraction failed: {e}{Colors.END}")
+        print(f"\n{Colors.FAIL}Extraction failed: {e}{Colors.END}")
         sys.exit(1)
 
 
@@ -549,87 +431,53 @@ def cmd_emulate(args, config: Config):
 
     # Create firmware info
     firmware = FirmwareInfo(file_path=str(firmware_path))
+    extractor = FirmwareExtractor(config)
+    is_dir = firmware_path.is_dir()
 
-    # Architecture detection
+    # Resolve architecture (a directory can't be opened as a file, so detect
+    # from its binaries instead of analysing the path as an image).
     if args.arch:
         firmware.architecture = Architecture.from_string(args.arch)
-        print(
-            f"\n{Colors.CYAN}[*] Using specified architecture: {firmware.architecture.value}{Colors.END}"
-        )
-
-        # Warn if specified arch conflicts with auto-detection
-        extractor = FirmwareExtractor(config)
-        auto_detected = extractor.analyze(str(firmware_path))
-        if auto_detected["architecture"] != Architecture.UNKNOWN and \
-           auto_detected["architecture"] != firmware.architecture:
-            print(
-                f"{Colors.WARNING}⚠ Warning: Auto-detection found {auto_detected['architecture'].value}, "
-                f"but you specified {firmware.architecture.value}{Colors.END}"
-            )
-            print(f"{Colors.WARNING}   Emulation may fail due to architecture mismatch!{Colors.END}")
+    elif is_dir:
+        info = extractor.detect_arch_from_rootfs(str(firmware_path))
+        if info:
+            firmware.architecture = info["architecture"]
     else:
-        # Auto-detect from firmware/extracted files
-        print(f"\n{Colors.CYAN}[*] Auto-detecting architecture...{Colors.END}")
-        extractor = FirmwareExtractor(config)
-        analysis = extractor.analyze(str(firmware_path))
-        firmware.architecture = analysis["architecture"]
+        try:
+            analysis = extractor.analyze(str(firmware_path))
+            firmware.architecture = analysis["architecture"]
+        except Exception as e:
+            ui.warn(f"Architecture detection failed: {e}")
 
-        if firmware.architecture == Architecture.UNKNOWN:
-            print(f"\n{Colors.FAIL}Error: Could not auto-detect architecture{Colors.END}")
-            print(f"\n{Colors.WARNING}Please specify the architecture manually:{Colors.END}")
-            print(f"  emberscan emulate {args.firmware} --arch <architecture>")
-            print(f"\n  Supported architectures: mipsel, mips, arm, aarch64, x86, x86_64")
-            print(
-                f"\n{Colors.CYAN}Tip: Check vendor documentation or use 'file' command on extracted binaries{Colors.END}"
-            )
-
-            # Show what was detected in the firmware
-            if analysis.get("components"):
-                print(f"\n{Colors.CYAN}Detected components:{Colors.END}")
-                for comp in analysis["components"][:5]:
-                    print(f"  - {comp['offset_hex']}: {comp['description']}")
-
-            sys.exit(1)
-
-        print(f"    Detected: {firmware.architecture.value}")
-
-        # Show additional detection info
-        if analysis.get("endianness"):
-            print(f"    Endianness: {analysis['endianness'].value}")
-        if analysis.get("filesystem_type"):
-            print(f"    Filesystem: {analysis['filesystem_type'].value}")
-
-    # Check if it's extracted rootfs or raw firmware
-    if firmware_path.is_dir():
+    # Obtain a rootfs: use the directory directly, or extract the image first.
+    if is_dir:
         firmware.rootfs_path = str(firmware_path)
         firmware.extracted = True
     else:
-        # Extract first
-        print(f"\n{Colors.CYAN}[*] Extracting firmware...{Colors.END}")
-        extractor = FirmwareExtractor(config)
-        rootfs = extractor.extract(str(firmware_path), "./emulation_temp")
+        ui.step("Extracting firmware...")
+        try:
+            rootfs = extractor.extract(str(firmware_path), "./emulation_temp")
+        except Exception as e:
+            ui.error(f"Cannot emulate: firmware could not be extracted ({e})")
+            sys.exit(1)
         firmware.rootfs_path = str(rootfs)
         firmware.extracted = True
 
-        # Re-detect architecture from extracted ELF binaries for better accuracy
-        if not args.arch:
-            print(f"{Colors.CYAN}[*] Verifying architecture from extracted binaries...{Colors.END}")
-            detected_arch = _detect_arch_from_rootfs(Path(rootfs))
-            if detected_arch and detected_arch != Architecture.UNKNOWN:
-                if detected_arch != firmware.architecture:
-                    print(
-                        f"    Updated architecture: {firmware.architecture.value} -> {detected_arch.value}"
-                    )
-                    firmware.architecture = detected_arch
-                else:
-                    print(f"    Confirmed: {detected_arch.value}")
+    if firmware.architecture == Architecture.UNKNOWN:
+        ui.warn(
+            "Architecture could not be determined; QEMU may fail to boot. "
+            "Pass --arch to force one."
+        )
 
-    print(f"\n{Colors.CYAN}[*] Starting QEMU emulation...{Colors.END}")
-    print(f"    Architecture: {firmware.architecture.value}")
-    print(f"    HTTP port:    {args.http_port}")
-    print(f"    SSH port:     {args.ssh_port}")
-    if args.display != "none":
-        print(f"    Display:      {args.display}")
+    ui.kv_panel(
+        "QEMU Emulation",
+        [
+            ("rootfs", firmware.rootfs_path),
+            ("arch", firmware.architecture.value),
+            ("http", args.http_port),
+            ("ssh", args.ssh_port),
+        ],
+    )
 
     try:
         manager = QEMUManager(config)
@@ -640,23 +488,22 @@ def cmd_emulate(args, config: Config):
             ssh_port=args.ssh_port,
             telnet_port=args.telnet_port,
             enable_debug=args.debug,
-            display_mode=args.display,
         )
 
         print(f"\n{Colors.GREEN}QEMU started (PID: {state.pid}){Colors.END}")
-        print(f"\nWaiting for boot...")
+        print("\nWaiting for boot...")
 
         if manager.wait_for_boot(state, timeout=300):
             print(f"\n{Colors.GREEN}Firmware booted successfully!{Colors.END}")
-            print(f"\nAccess points:")
+            print("\nAccess points:")
             print(f"  Web:    http://localhost:{args.http_port}")
             print(f"  SSH:    ssh -p {args.ssh_port} root@localhost")
             print(f"  Telnet: telnet localhost {args.telnet_port}")
 
             if args.debug:
-                print(f"  GDB:    target remote localhost:1234")
+                print("  GDB:    target remote localhost:1234")
 
-            print(f"\nPress Ctrl+C to stop emulation...")
+            print("\nPress Ctrl+C to stop emulation...")
 
             # Wait for user interrupt
             try:
@@ -671,32 +518,203 @@ def cmd_emulate(args, config: Config):
             print(
                 f"\n{Colors.WARNING}Boot timeout - firmware may not be fully functional{Colors.END}"
             )
-            print(f"\n{Colors.CYAN}Troubleshooting tips:{Colors.END}")
-            print(f"  1. Check if the architecture is correct: {firmware.architecture.value}")
-            print(f"     - TP-Link Archer AX routers are typically ARM (aarch64 or arm)")
-            print(f"     - Older routers are often MIPS (mipsel or mips)")
-            print(f"  2. Try specifying architecture manually:")
-            print(f"     emberscan emulate {args.firmware} --arch arm")
-            print(f"  3. Ensure emulation kernels are downloaded:")
-            print(f"     emberscan download-kernels")
-            print(f"  4. Check logs for errors: logs/emberscan_*.log")
 
         manager.stop(state)
         print(f"\n{Colors.CYAN}Emulation stopped{Colors.END}")
 
     except Exception as e:
-        from emberscan.core.exceptions import EmulationError, KernelNotFoundError
-
-        if isinstance(e, KernelNotFoundError):
-            print(f"\n{Colors.FAIL}Kernel not found: {e}{Colors.END}")
-            print(
-                f"\n{Colors.WARNING}Run 'emberscan download-kernels' to download emulation kernels{Colors.END}"
-            )
-        elif isinstance(e, EmulationError):
-            print(f"\n{Colors.FAIL}Emulation error: {e}{Colors.END}")
-        else:
-            print(f"\n{Colors.FAIL}Emulation failed: {e}{Colors.END}")
+        print(f"\n{Colors.FAIL}Emulation failed: {e}{Colors.END}")
         sys.exit(1)
+
+
+def cmd_analyze(args, config: Config):
+    """Execute per-binary emulation analysis."""
+    from emberscan.core.models import Architecture, FirmwareInfo
+    from emberscan.scanners.emulation_scanner import EmulationScanner
+
+    target = Path(args.target)
+    if not target.exists():
+        print(f"{Colors.FAIL}Error: Path not found: {args.target}{Colors.END}")
+        sys.exit(1)
+
+    # Apply CLI overrides onto the emulation config
+    config.emulation.enabled = True
+    config.emulation.backend = args.backend
+    config.emulation.rootfs = args.rootfs
+    config.emulation.max_binaries = args.max_binaries
+    config.emulation.timeout_per_binary = args.timeout
+    config.emulation.mem_events = not args.no_mem_events
+    if args.detectors:
+        config.emulation.detectors = [d.strip() for d in args.detectors.split(",")]
+
+    firmware = FirmwareInfo(file_path=str(target), name=target.name)
+    if args.arch:
+        firmware.architecture = Architecture.from_string(args.arch)
+
+    ui.kv_panel(
+        "Emulated Analysis",
+        [
+            ("target", target),
+            ("backend", args.backend),
+            ("detectors", args.detectors or "all"),
+        ],
+    )
+
+    scanner = EmulationScanner(config)
+    result = scanner.scan(str(target), firmware)
+    vulns = result.vulnerabilities
+
+    counts = {s: sum(1 for v in vulns if _sev(v) == s) for s in SEVERITY_ORDER}
+    ui.blank()
+    ui.rule("Findings")
+    ui.info(
+        f"Binaries emulated: {result.items_scanned}"
+        + (f"  ·  Duration: {result.duration:.1f}s" if result.duration else "")
+    )
+    ui.blank()
+    ui.severity_summary(counts, len(vulns))
+    ui.blank()
+    ui.findings_table(_vulns_to_rows(vulns))
+
+    if counts["critical"]:
+        sys.exit(2)
+    elif counts["high"]:
+        sys.exit(1)
+
+
+def _session_from_report(data: dict):
+    """Reconstruct a ScanSession from a saved EmberScan JSON report so reports
+    can be regenerated without re-scanning."""
+    from datetime import datetime as _dt
+
+    from emberscan.core.models import (
+        Architecture,
+        Endianness,
+        FilesystemType,
+        FirmwareInfo,
+        ScanResult,
+        ScanSession,
+        Severity,
+        Vulnerability,
+        VulnerabilityType,
+    )
+
+    def _ts(v):
+        try:
+            return _dt.fromisoformat(v) if v else None
+        except Exception:
+            return None
+
+    def _enum(cls, val, default):
+        try:
+            return cls(val)
+        except Exception:
+            return default
+
+    info = data.get("scan_info", {})
+    session = ScanSession(name=info.get("session_name", "regenerated"))
+    if info.get("session_id"):
+        session.id = info["session_id"]
+    session.started_at = _ts(info.get("started_at"))
+    session.completed_at = _ts(info.get("completed_at"))
+
+    fw = (data.get("target", {}) or {}).get("firmware")
+    if fw:
+        session.firmware = FirmwareInfo(
+            name=fw.get("name", ""),
+            version=fw.get("version", ""),
+            vendor=fw.get("vendor", ""),
+            device_type=fw.get("device_type", ""),
+            file_path=fw.get("file_path", ""),
+            architecture=_enum(Architecture, fw.get("architecture"), Architecture.UNKNOWN),
+            endianness=_enum(Endianness, fw.get("endianness"), Endianness.UNKNOWN),
+            filesystem_type=_enum(
+                FilesystemType, fw.get("filesystem_type"), FilesystemType.UNKNOWN
+            ),
+        )
+
+    for r in data.get("scan_results", []):
+        result = ScanResult(
+            scanner_name=r.get("scanner_name", ""), scan_type=r.get("scan_type", "")
+        )
+        for v in r.get("vulnerabilities", []):
+            result.vulnerabilities.append(
+                Vulnerability(
+                    title=v.get("title", ""),
+                    description=v.get("description", ""),
+                    severity=_enum(Severity, v.get("severity"), Severity.INFO),
+                    vuln_type=_enum(VulnerabilityType, v.get("vuln_type"), VulnerabilityType.OTHER),
+                    file_path=v.get("file_path"),
+                    line_number=v.get("line_number"),
+                    function_name=v.get("function_name"),
+                    evidence=v.get("evidence", "") or "",
+                    remediation=v.get("remediation", "") or "",
+                    cve_ids=v.get("cve_ids", []) or [],
+                    cwe_ids=v.get("cwe_ids", []) or [],
+                    scanner_name=v.get("scanner_name", ""),
+                    occurrences=v.get("occurrences", 1) or 1,
+                    extra_locations=v.get("extra_locations", []) or [],
+                )
+            )
+        session.scan_results.append(result)
+    return session
+
+
+def cmd_report(args, config: Config):
+    """Regenerate reports from a saved EmberScan JSON report."""
+    import json
+
+    path = Path(args.session_id)
+    if path.is_dir():
+        cands = sorted(path.glob("emberscan_*.json"))
+        if not cands:
+            ui.error(f"No EmberScan JSON report found in {path}")
+            sys.exit(1)
+        path = cands[0]
+    if not path.exists():
+        ui.error(
+            f"Report not found: {args.session_id} "
+            "(pass a saved emberscan_*.json file or its directory)"
+        )
+        sys.exit(1)
+
+    try:
+        data = json.loads(path.read_text())
+    except Exception as e:
+        ui.error(f"Could not parse JSON report: {e}")
+        sys.exit(1)
+
+    session = _session_from_report(data)
+    config.reporter.output_formats = [f.strip() for f in args.format.split(",")]
+    config.reporter.output_dir = args.output
+
+    from emberscan.reporters.html_reporter import HTMLReporter
+    from emberscan.reporters.json_reporter import JSONReporter
+
+    out_dir = Path(args.output) / session.report_slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ui.kv_panel(
+        "Regenerate Report",
+        [
+            ("source", path),
+            ("formats", ", ".join(config.reporter.output_formats)),
+            ("findings", len(session.all_vulnerabilities)),
+        ],
+    )
+    written = []
+    for fmt in config.reporter.output_formats:
+        try:
+            if fmt == "html":
+                written.append(HTMLReporter(config).generate(session, str(out_dir)))
+            elif fmt in ("json", "sarif"):
+                written.append(JSONReporter(config).generate(session, str(out_dir)))
+            else:
+                ui.warn(f"Unknown report format: {fmt}")
+        except Exception as e:
+            ui.error(f"Failed to generate {fmt}: {e}")
+    for w in written:
+        ui.success(f"Wrote {w}")
 
 
 def cmd_spi_read(args, config: Config):
@@ -732,6 +750,24 @@ def cmd_check_deps(args, config: Config):
     print_dependency_status()
 
 
+def cmd_install_deps(args, config: Config):
+    """Install the Python emulation libraries into the current environment."""
+    print(
+        f"\n{Colors.CYAN}[*] Installing emulation libraries "
+        f"(unicorn, capstone, keystone, qiling)...{Colors.END}"
+    )
+    rc = install_python_deps(upgrade_pip=not args.no_pip_upgrade)
+    if rc == 0:
+        print(f"\n{Colors.GREEN}[+] Done.{Colors.END}")
+    else:
+        print(
+            f"\n{Colors.FAIL}[!] pip exited with code {rc}. "
+            f"Check network/permissions, or run: python scripts/install.py{Colors.END}"
+        )
+    print_dependency_status()
+    sys.exit(rc)
+
+
 def cmd_download_kernels(args, config: Config):
     """Download emulation kernels."""
     config.qemu.kernel_dir = args.output
@@ -742,31 +778,8 @@ def cmd_download_kernels(args, config: Config):
         archs = [args.arch]
 
     print(f"\n{Colors.CYAN}[*] Downloading emulation kernels...{Colors.END}")
-    results = manager.download_kernels(archs)
-
-    # Summary of download results
-    successful = [arch for arch, success in results.items() if success]
-    failed = [arch for arch, success in results.items() if not success]
-
-    if successful:
-        print(
-            f"\n{Colors.GREEN}Successfully downloaded kernels for: {', '.join(successful)}{Colors.END}"
-        )
-        print(f"{Colors.GREEN}Kernels saved to: {Path(args.output).absolute()}{Colors.END}")
-
-    if failed:
-        print(f"\n{Colors.FAIL}Failed to download kernels for: {', '.join(failed)}{Colors.END}")
-        print(f"{Colors.WARNING}Try downloading manually from:{Colors.END}")
-        print(f"  - MIPS: https://github.com/firmadyne/kernel-v2.6/releases")
-        print(f"  - ARM:  https://github.com/firmadyne/kernel-v4.1/releases")
-
-    if not successful and not failed:
-        print(
-            f"\n{Colors.WARNING}No kernels to download (all already exist or no valid architectures specified){Colors.END}"
-        )
-
-    if failed:
-        sys.exit(1)
+    manager.download_kernels(archs)
+    print(f"\n{Colors.GREEN}Kernels saved to: {args.output}{Colors.END}")
 
 
 def main():
@@ -774,13 +787,19 @@ def main():
     parser = create_parser()
     args = parser.parse_args()
 
-    # Show banner unless quiet
-    if not args.quiet and args.command:
-        print(BANNER)
+    ui.quiet = bool(getattr(args, "quiet", False))
 
-    # Setup logging
-    log_level = "DEBUG" if args.debug else "INFO"
-    setup_logging(level=log_level)
+    # Show banner unless quiet
+    if args.command:
+        ui.banner(__version__)
+
+    # Setup logging. The file always captures DEBUG+; the console stays quiet
+    # (WARNING+) unless --debug is passed, so logs never bury the CLI output.
+    setup_logging(
+        level="DEBUG",
+        console_level="DEBUG" if args.debug else ("ERROR" if ui.quiet else "WARNING"),
+        force=True,
+    )
 
     # Load configuration
     config = Config.load(args.config)
@@ -795,10 +814,16 @@ def main():
         cmd_extract(args, config)
     elif args.command == "emulate":
         cmd_emulate(args, config)
+    elif args.command == "analyze":
+        cmd_analyze(args, config)
+    elif args.command == "report":
+        cmd_report(args, config)
     elif args.command == "spi-read":
         cmd_spi_read(args, config)
     elif args.command == "check-deps":
         cmd_check_deps(args, config)
+    elif args.command == "install-deps":
+        cmd_install_deps(args, config)
     elif args.command == "download-kernels":
         cmd_download_kernels(args, config)
     else:

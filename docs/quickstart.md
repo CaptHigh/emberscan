@@ -27,7 +27,7 @@ sudo apt install binwalk squashfs-tools qemu-system-mips qemu-system-arm nmap
 
 **Or use the installation script:**
 ```bash
-sudo ./scripts/install_linux.sh
+./scripts/install_linux.sh      # run as your normal user; asks for sudo only for apt
 ```
 
 ## Verify Installation

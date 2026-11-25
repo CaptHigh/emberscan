@@ -49,6 +49,43 @@ qemu:
   telnet_forward_port: 2323
 
 # =============================================================================
+# Dynamic (per-binary) Emulation Analysis
+# =============================================================================
+# Loads individual binaries from the extracted firmware, emulates their code,
+# and runs runtime detectors. Independent of the full-system QEMU settings
+# above. Requires: pip install 'emberscan[emulation]'
+
+emulation:
+  # Master switch for the EmulationScanner
+  enabled: true
+
+  # Execution backend: auto (Qiling if installed, else Unicorn), qiling,
+  # unicorn, or mock (testing only)
+  backend: auto
+
+  # Detectors to run (omit / null = all): memory_safety, taint, info_leak, weak_code
+  detectors: null
+
+  # Max binaries to emulate per firmware (highest attack-surface first)
+  max_binaries: 25
+
+  # Only emulate binaries whose name contains one of these (null = all)
+  # include: [httpd, cgi, telnetd]
+  include: null
+
+  # Per-binary limits
+  timeout_per_binary: 30
+  max_instructions: 2000000
+
+  # Emit per-access memory events (needed for heap red-zone checks; costs
+  # performance under Qiling - set false for a faster call-only run)
+  mem_events: true
+
+  # Overall wall-clock budget for the whole emulation pass in seconds
+  # (0 = fall back to scanner.timeout_per_scan)
+  total_timeout: 0
+
+# =============================================================================
 # Scanner Settings
 # =============================================================================
 
@@ -57,10 +94,11 @@ scanner:
   enabled_scanners:
     - web           # Web interface vulnerabilities
     - network       # Network service security
-    - binary        # Binary analysis
+    - binary        # Binary analysis (static)
     - cve           # CVE correlation
     - credentials   # Credential discovery
-    - crypto        # Cryptographic issues
+    - crypto        # Cryptographic issues (static)
+    - emulation     # Dynamic per-binary emulation analysis
   
   # Number of parallel scanner threads
   parallel_scans: 4
