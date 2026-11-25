@@ -136,6 +136,27 @@ class FirmwareExtractor:
                 result["architecture"] = arch_info["architecture"]
                 result["endianness"] = arch_info["endianness"]
 
+        # If the top-level image is compressed (no raw ELF), fall back to the
+        # U-Boot uImage header's CPU field so we still report an architecture.
+        if result["architecture"] == Architecture.UNKNOWN:
+            uimage_arch = self._detect_arch_from_uimage(data)
+            if uimage_arch is not None:
+                result["architecture"] = uimage_arch
+
+        # ESP32 / ESP8266 firmware images (Espressif, Xtensa core) start with
+        # the 0xE9 image magic and carry recognisable ESP-IDF strings.
+        if result["architecture"] == Architecture.UNKNOWN and self._looks_like_esp(data):
+            result["architecture"] = Architecture.XTENSA
+            result["endianness"] = Endianness.LITTLE
+            result["components"].append(
+                {
+                    "type": "esp_image",
+                    "description": "Espressif ESP32/ESP8266 image (Xtensa)",
+                    "offset": 0,
+                    "offset_hex": "0x0",
+                }
+            )
+
         # Run binwalk for more detailed analysis
         binwalk_results = self._run_binwalk_analysis(firmware_path)
         if binwalk_results:
@@ -495,27 +516,104 @@ class FirmwareExtractor:
         else:
             machine = struct.unpack(">H", data[18:20])[0]
 
-        # Map machine type to architecture
+        # Map ELF e_machine to architecture
         arch_map = {
+            0x02: Architecture.SPARC,
             0x03: Architecture.X86,
             0x08: Architecture.MIPS_BE,  # Default, check endianness
             0x14: Architecture.PPC,
+            0x15: Architecture.PPC64,
+            0x16: Architecture.SPARC,
             0x28: Architecture.ARM,
+            0x2A: Architecture.SH4,
             0x3E: Architecture.X86_64,
+            0x5E: Architecture.XTENSA,  # EM_XTENSA = 94
             0xB7: Architecture.ARM64,
+            0xF3: Architecture.RISCV,  # EM_RISCV = 243 (width via elf_class)
         }
 
         arch = arch_map.get(machine, Architecture.UNKNOWN)
 
         # Adjust MIPS based on endianness
-        if arch == Architecture.MIPS_BE and endian == Endianness.LITTLE:
-            arch = Architecture.MIPS_LE
+        if arch == Architecture.MIPS_BE:
+            if elf_class == 2:
+                arch = Architecture.MIPS64
+            elif endian == Endianness.LITTLE:
+                arch = Architecture.MIPS_LE
+        elif arch == Architecture.RISCV and elf_class == 2:
+            arch = Architecture.RISCV64
 
         return {
             "architecture": arch,
             "endianness": endian,
             "bits": 64 if elf_class == 2 else 32,
         }
+
+    # U-Boot uImage ih_arch field (include/image.h) -> our Architecture.
+    _UIMAGE_ARCH = {
+        2: Architecture.ARM,
+        3: Architecture.X86,
+        5: Architecture.MIPS_BE,
+        6: Architecture.MIPS64,
+        7: Architecture.PPC,
+        15: Architecture.SH4,
+        22: Architecture.ARM64,
+        26: Architecture.XTENSA,
+        29: Architecture.X86_64,
+    }
+
+    def _detect_arch_from_uimage(self, data: bytes) -> Optional[Architecture]:
+        """Read the CPU field of the first U-Boot uImage header (big-endian)."""
+        magic = b"\x27\x05\x19\x56"
+        pos = data.find(magic)
+        if pos == -1 or pos + 32 > len(data):
+            return None
+        ih_arch = data[pos + 29]
+        return self._UIMAGE_ARCH.get(ih_arch)
+
+    @staticmethod
+    def _looks_like_esp(data: bytes) -> bool:
+        """Heuristic for Espressif ESP32/ESP8266 images (Xtensa)."""
+        if not data or data[0] != 0xE9:
+            return False
+        markers = (b"esp_image", b"ota_data", b"partition", b"bootloader_", b"esp-idf", b"phy_init")
+        head = data[:65536]
+        return sum(1 for m in markers if m in head) >= 2
+
+    def detect_arch_from_rootfs(self, rootfs_path: str) -> Optional[Dict]:
+        """Determine architecture by inspecting the first real ELF binary in an
+        extracted root filesystem. More reliable than header heuristics on the
+        compressed image (e.g. distinguishes mips vs mipsel)."""
+        root = Path(rootfs_path)
+        if not root.is_dir():
+            return None
+        # Prefer well-known native binaries, then any ELF.
+        preferred = ["bin/busybox", "bin/sh", "sbin/init", "lib/libc.so.0", "usr/bin/httpd"]
+        candidates: List[Path] = []
+        for rel in preferred:
+            p = root / rel
+            if p.is_file():
+                candidates.append(p)
+        if not candidates:
+            for p in root.rglob("*"):
+                if p.is_file() and not p.is_symlink():
+                    try:
+                        with open(p, "rb") as fh:
+                            if fh.read(4) == b"\x7fELF":
+                                candidates.append(p)
+                                break
+                    except OSError:
+                        continue
+        for p in candidates:
+            try:
+                with open(p, "rb") as fh:
+                    header = fh.read(52)
+            except OSError:
+                continue
+            info = self._parse_elf_header(header)
+            if info and info["architecture"] != Architecture.UNKNOWN:
+                return info
+        return None
 
     def _analyze_entropy(self, data: bytes, block_size: int = 1024) -> Dict:
         """Analyze entropy of firmware data."""

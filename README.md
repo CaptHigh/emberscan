@@ -14,6 +14,7 @@
 
 - **🔬 Firmware Extraction** - Extract firmware from SPI flash dumps and manufacturer files
 - **🖥️ QEMU Emulation** - Emulate firmware across MIPS, ARM, x86, PowerPC architectures
+- **🧬 Dynamic Emulation Analysis** - Load individual binaries, emulate their code (Qiling/Unicorn), and detect vulnerabilities, info leaks, and weak code at runtime
 - **🔍 Vulnerability Scanning** - Comprehensive security analysis similar to Nessus/Nikto
 - **📊 CVE Correlation** - Match findings against known CVE database
 - **📝 Professional Reports** - HTML, JSON, and SARIF format reports
@@ -33,7 +34,52 @@
 
 ## 🚀 Installation
 
-### Prerequisites
+### Automated install (recommended)
+
+**Linux (Debian / Ubuntu / Kali)** — run as your normal user (it asks for sudo only for `apt`):
+
+```bash
+git clone https://github.com/CaptHigh/emberscan.git
+cd emberscan
+./scripts/install_linux.sh
+```
+
+**macOS / Windows:**
+
+```bash
+python3 scripts/install.py           # macOS (add --with-external to brew-install tools)
+scripts\install.bat                  # Windows (cmd)
+.\scripts\install.ps1                # Windows (PowerShell)
+```
+
+The installer:
+
+- creates a private virtualenv in `./venv`, so it never conflicts with system
+  Python (Kali/Debian block system-wide `pip install`);
+- installs EmberScan, the emulation libraries, and (Linux) binwalk, qemu, nmap, ...;
+- adds an `emberscan` command to `~/.local/bin`;
+- **checks that EmberScan actually runs at the end**: it exits with a red
+  `INSTALLATION FAILED` banner and the exact fix if anything required is broken,
+  and lists any missing optional tools in yellow.
+
+It is safe to re-run at any time. If a system update breaks the install
+(e.g. Kali upgrading Python), `emberscan` tells you, and re-running the installer
+rebuilds the environment automatically.
+
+```bash
+./scripts/install_linux.sh --check   # verify an existing install, change nothing
+./scripts/install_linux.sh --strict  # also fail if an optional tool is missing
+python3 scripts/install.py --recreate-venv   # rebuild ./venv from scratch
+```
+
+> On Windows the `analyze` / emulation path needs only the Python libraries
+> (all ship as Windows wheels). `binwalk`, `qemu`, etc. are only for firmware
+> extraction and full-system emulation and are easiest under WSL2.
+
+### Manual install
+
+Only needed if you are not using the installer above.
+
 
 **System Dependencies (Ubuntu/Debian):**
 
@@ -150,9 +196,11 @@ emberscan <command> [options]
 Commands:
   scan            Scan firmware for vulnerabilities
   extract         Extract firmware filesystem
-  emulate         Emulate firmware in QEMU
+  emulate         Emulate firmware in QEMU (full-system)
+  analyze         Emulate binaries and run dynamic vulnerability detectors
   spi-read        Read firmware from SPI flash chip
   check-deps      Check installed dependencies
+  install-deps    Install the Python emulation libraries
   download-kernels Download QEMU emulation kernels
 
 Global Options:
@@ -314,6 +362,77 @@ enabled_plugins: []
 | **credentials** | Credential discovery | Hardcoded passwords, API keys, private keys, weak hashes |
 | **cve** | CVE correlation | Known vulnerabilities, version matching |
 | **crypto** | Cryptographic issues | Weak algorithms, key management |
+| **emulation** | Dynamic per-binary emulation | Memory-safety faults, taint→sink, format strings, runtime weak crypto/RNG/auth |
+
+## 🧬 Dynamic Emulation Analysis
+
+The `emulation` scanner loads individual binaries from the extracted rootfs,
+**emulates their code**, and runs backend-agnostic *detectors* over the
+execution. It complements the static scanners by reporting issues that only
+appear at runtime, and runs independently of full-system QEMU boot (no kernel,
+sudo, or mount required — it works on Windows too).
+
+```bash
+# analyze an extracted rootfs (auto-selects the highest attack-surface binaries)
+emberscan analyze ./extracted/squashfs-root
+
+# analyze a single binary with a chosen backend and detector subset
+emberscan analyze ./bin/httpd --backend qiling --detectors taint,memory_safety
+
+# it also runs automatically as part of `scan` (unless --static-only)
+emberscan scan firmware.bin
+```
+
+Install the (optional) emulation dependencies:
+
+```bash
+pip install 'emberscan[emulation]'   # qiling + unicorn + capstone
+```
+
+### Detectors
+
+| Detector | Finds | Technique |
+|----------|-------|-----------|
+| **memory_safety** | OOB read/write, NULL deref, heap overflow, use-after-free, double-free | ASAN-style red-zones + faulting-access hooks |
+| **taint** | Command injection, unbounded-copy overflow | Input sources → copy propagation → dangerous sinks |
+| **info_leak** | Format-string (`%n`/tainted fmt), secret egress | Tainted-format detection, secret→sink tracking |
+| **weak_code** | MD5/SHA1/DES/RC4/ECB, predictable PRNG seed, non-constant-time credential compare | Weak primitives actually *called* at runtime |
+
+### Architecture (and the hardware path)
+
+```
+          ┌──────────────── detectors (backend-agnostic) ────────────────┐
+events ──▶│  memory_safety   taint   info_leak   weak_code                │──▶ Findings ─▶ Vulnerability
+          └──────────────────────────────────────────────────────────────┘
+                    ▲ normalized TraceEvent stream (BlockEvent, MemEvent, CallEvent, …)
+     ┌──────────────┴───────────────┬───────────────────────────┐
+ UnicornBackend              QilingBackend                HardwareBackend
+ (bare-metal / raw)          (Linux user-space ELF,       (Raspberry-Pi harness,
+                              uses rootfs as sysroot)       JTAG/SWD or serial — planned)
+```
+
+Every detector consumes one normalized event stream, so the **same** analyses
+run over any backend. The planned Raspberry-Pi hardware harness slots in as
+`HardwareBackend` (`emberscan/dynamic/backend.py`): once it drives a real chip
+and emits the same events, all existing detectors run unchanged on physical
+hardware — this is the integration seam for merging the software and hardware
+sides of the toolkit.
+
+### Verify across architectures
+
+After installing the emulation extras, confirm the engine works on every
+supported CPU (runs the real Unicorn backend, not a mock):
+
+```bash
+python tests/verify_multiarch.py
+```
+
+It assembles a tiny probe per architecture (ARM, ARM64, MIPS, MIPSel, x86,
+x86_64), runs it through the detector pipeline, and prints a PASS/FAIL matrix.
+
+> ⚠️ The emulation scanner executes code taken from the target firmware. Run it
+> inside the project's Docker sandbox or a throwaway VM, and only against
+> firmware you are authorised to assess.
 
 ## 🧪 Development
 

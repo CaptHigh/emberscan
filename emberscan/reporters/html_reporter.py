@@ -389,7 +389,7 @@ class HTMLReporter:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        report_file = output_path / f"emberscan_report_{session.id[:8]}.html"
+        report_file = output_path / f"emberscan_{session.report_slug}.html"
 
         # Prepare template variables
         variables = self._prepare_variables(session)
@@ -556,11 +556,12 @@ class HTMLReporter:
         for result in scan_results:
             vuln_count = len(result.vulnerabilities)
             status_icon = "✅" if result.status.name == "COMPLETED" else "❌"
+            dur = f"{result.duration:.1f}s" if result.duration is not None else "n/a"
 
             html += f"""
             <div class="item">
                 <span class="label">{result.scanner_name}</span>
-                <span class="value">{status_icon} {vuln_count} findings ({result.duration:.1f}s)</span>
+                <span class="value">{status_icon} {vuln_count} findings ({dur})</span>
             </div>
             """
 

@@ -107,12 +107,12 @@ class BinaryScanner(BaseScanner):
 
             # Phase 2: Analyze dangerous functions
             logger.info(f"[{self.name}] Analyzing dangerous function calls")
-            func_vulns = self._analyze_dangerous_functions(binaries[:50])  # Limit
+            func_vulns = self._analyze_dangerous_functions(binaries[:50], rootfs)  # Limit
             result.vulnerabilities.extend(func_vulns)
 
             # Phase 3: Check binary hardening
             logger.info(f"[{self.name}] Checking binary hardening")
-            hardening_vulns = self._check_binary_hardening(binaries[:20])
+            hardening_vulns = self._check_binary_hardening(binaries[:20], rootfs)
             result.vulnerabilities.extend(hardening_vulns)
 
             # Phase 4: Search for backdoor indicators
@@ -133,20 +133,41 @@ class BinaryScanner(BaseScanner):
         return result
 
     def _find_binaries(self, rootfs: Path) -> List[Path]:
-        """Find all ELF binaries in filesystem."""
-        binaries = []
+        """Find unique ELF binaries in the filesystem.
 
-        # Common binary directories
+        Symlinks are skipped and results are de-duplicated by resolved path, so
+        one physical binary exposed under many names (busybox applets, library
+        aliases) is analysed once instead of producing a finding per alias.
+        """
         bin_dirs = ["bin", "sbin", "usr/bin", "usr/sbin", "lib", "usr/lib"]
+        seen: set = set()
+        binaries: List[Path] = []
 
         for bin_dir in bin_dirs:
             search_dir = rootfs / bin_dir
-            if search_dir.exists():
-                for item in search_dir.rglob("*"):
-                    if item.is_file() and self._is_elf(item):
-                        binaries.append(item)
+            if not search_dir.exists():
+                continue
+            for item in search_dir.rglob("*"):
+                if item.is_symlink() or not item.is_file():
+                    continue
+                try:
+                    real = item.resolve()
+                except OSError:
+                    real = item
+                if real in seen:
+                    continue
+                if self._is_elf(item):
+                    seen.add(real)
+                    binaries.append(item)
 
         return binaries
+
+    def _rel(self, path: Path, rootfs: Path) -> str:
+        """Path relative to the rootfs, for clean, portable reporting."""
+        try:
+            return str(path.relative_to(rootfs))
+        except Exception:
+            return path.name
 
     def _is_elf(self, path: Path) -> bool:
         """Check if file is an ELF binary."""
@@ -235,7 +256,9 @@ class BinaryScanner(BaseScanner):
 
         return vulnerabilities
 
-    def _analyze_dangerous_functions(self, binaries: List[Path]) -> List[Vulnerability]:
+    def _analyze_dangerous_functions(
+        self, binaries: List[Path], rootfs: Path = None
+    ) -> List[Vulnerability]:
         """Analyze binaries for dangerous function imports."""
         vulnerabilities = []
         seen_combos: Set[tuple] = set()
@@ -265,7 +288,7 @@ class BinaryScanner(BaseScanner):
                             description=f"Binary uses potentially dangerous functions: {', '.join(high_funcs)}",
                             severity=Severity.MEDIUM,
                             vuln_type=VulnerabilityType.COMMAND_INJECTION,
-                            file_path=str(binary),
+                            file_path=self._rel(binary, rootfs) if rootfs else binary.name,
                             evidence=f"Functions: {', '.join(f for f, _, _ in dangerous_found)}",
                             remediation="Review code for proper input validation",
                         )
@@ -315,7 +338,9 @@ class BinaryScanner(BaseScanner):
 
         return symbols
 
-    def _check_binary_hardening(self, binaries: List[Path]) -> List[Vulnerability]:
+    def _check_binary_hardening(
+        self, binaries: List[Path], rootfs: Path = None
+    ) -> List[Vulnerability]:
         """Check binary security hardening features."""
         vulnerabilities = []
 
@@ -347,7 +372,7 @@ class BinaryScanner(BaseScanner):
                         description=f"Binary lacks security hardening: {'; '.join(issues)}",
                         severity=Severity.LOW,
                         vuln_type=VulnerabilityType.OTHER,
-                        file_path=str(binary),
+                        file_path=self._rel(binary, rootfs) if rootfs else binary.name,
                         evidence=str(hardening),
                         remediation="Recompile with security flags: -fstack-protector -D_FORTIFY_SOURCE=2 -pie -z relro -z now",
                     )

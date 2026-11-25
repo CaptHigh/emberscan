@@ -25,6 +25,12 @@ class Architecture(Enum):
     X86_64 = "x86_64"
     PPC = "ppc"
     PPC64 = "ppc64"
+    MIPS64 = "mips64"
+    RISCV = "riscv"
+    RISCV64 = "riscv64"
+    SH4 = "sh4"
+    SPARC = "sparc"
+    XTENSA = "xtensa"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -48,6 +54,16 @@ class Architecture(Enum):
             "ppc": cls.PPC,
             "powerpc": cls.PPC,
             "ppc64": cls.PPC64,
+            "mips64": cls.MIPS64,
+            "riscv": cls.RISCV,
+            "riscv32": cls.RISCV,
+            "riscv64": cls.RISCV64,
+            "sh4": cls.SH4,
+            "superh": cls.SH4,
+            "sparc": cls.SPARC,
+            "xtensa": cls.XTENSA,
+            "esp32": cls.XTENSA,
+            "esp8266": cls.XTENSA,
         }
         return mappings.get(arch_str.lower(), cls.UNKNOWN)
 
@@ -120,6 +136,10 @@ class VulnerabilityType(Enum):
     INFORMATION_DISCLOSURE = "info_disclosure"
     HARDCODED_CREDENTIALS = "hardcoded_creds"
     WEAK_CRYPTO = "weak_crypto"
+    WEAK_RNG = "weak_rng"
+    FORMAT_STRING = "format_string"
+    MEMORY_CORRUPTION = "memory_corruption"
+    USE_AFTER_FREE = "use_after_free"
     BACKDOOR = "backdoor"
     INSECURE_PROTOCOL = "insecure_protocol"
     PRIVILEGE_ESCALATION = "priv_esc"
@@ -240,6 +260,12 @@ class Vulnerability:
     confidence: float = 1.0  # 0.0 to 1.0
     false_positive: bool = False
 
+    # De-duplication: when the same finding appears in several files (e.g. the
+    # many busybox applet symlinks), identical findings are collapsed into one
+    # with the extra file paths recorded here.
+    occurrences: int = 1
+    extra_locations: List[str] = field(default_factory=list)
+
     # Timestamps
     discovered_at: datetime = field(default_factory=datetime.now)
 
@@ -267,6 +293,8 @@ class Vulnerability:
             "scanner_name": self.scanner_name,
             "confidence": self.confidence,
             "false_positive": self.false_positive,
+            "occurrences": self.occurrences,
+            "extra_locations": self.extra_locations,
             "discovered_at": self.discovered_at.isoformat(),
         }
 
@@ -353,12 +381,65 @@ class ScanSession:
     scan_results: List[ScanResult] = field(default_factory=list)
 
     @property
+    def report_slug(self) -> str:
+        """Human-friendly, filesystem-safe report name: ``<binary>-<timestamp>``.
+
+        Far more manageable than a bare UUID when reports pile up: the firmware
+        name (or file stem) plus the scan start time, e.g.
+        ``ArcherC20v2-20261125-094210``.
+        """
+        import re as _re
+
+        base = ""
+        if self.firmware:
+            base = self.firmware.name or Path(self.firmware.file_path or "").stem
+        base = _re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._-") or "firmware"
+        ts = (self.started_at or self.created_at or datetime.now()).strftime("%Y%m%d-%H%M%S")
+        return f"{base}-{ts}"
+
+    @property
     def all_vulnerabilities(self) -> List[Vulnerability]:
         """Get all vulnerabilities from all scan results."""
         vulns = []
         for result in self.scan_results:
             vulns.extend(result.vulnerabilities)
         return vulns
+
+    def deduplicate(self) -> int:
+        """Collapse identical findings that repeat across many files.
+
+        Firmware images routinely contain one physical binary exposed under
+        dozens of names (busybox applets, library symlinks). Each copy would
+        otherwise produce its own identical finding and bury the real issues.
+        Findings sharing the same (type, title, severity, evidence) are merged
+        into a single finding whose ``occurrences`` and ``extra_locations``
+        record every affected path.
+
+        Returns the number of duplicate findings removed.
+        """
+        removed = 0
+        for result in self.scan_results:
+            seen: Dict[tuple, Vulnerability] = {}
+            collapsed: List[Vulnerability] = []
+            for v in result.vulnerabilities:
+                key = (
+                    getattr(v.vuln_type, "value", v.vuln_type),
+                    v.title,
+                    getattr(v.severity, "value", v.severity),
+                    v.evidence,
+                )
+                primary = seen.get(key)
+                if primary is None:
+                    seen[key] = v
+                    collapsed.append(v)
+                else:
+                    primary.occurrences += 1
+                    loc = v.file_path or ""
+                    if loc and loc != primary.file_path and loc not in primary.extra_locations:
+                        primary.extra_locations.append(loc)
+                    removed += 1
+            result.vulnerabilities = collapsed
+        return removed
 
     @property
     def critical_count(self) -> int:

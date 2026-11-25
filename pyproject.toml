@@ -58,6 +58,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+emulation = [
+    "qiling>=1.4.6",
+    "unicorn>=2.0.0",
+    "capstone>=5.0.0",
+    "keystone-engine>=0.9.2",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -74,7 +80,7 @@ docs = [
     "myst-parser>=1.0.0",
 ]
 all = [
-    "emberscan[dev,docs]",
+    "emberscan[dev,docs,emulation]",
 ]
 
 [project.urls]
@@ -93,9 +99,10 @@ network = "emberscan.scanners.network_scanner:NetworkScanner"
 binary = "emberscan.scanners.binary_scanner:BinaryScanner"
 credentials = "emberscan.scanners.credential_scanner:CredentialScanner"
 cve = "emberscan.scanners.cve_scanner:CVEScanner"
+emulation = "emberscan.scanners.emulation_scanner:EmulationScanner"
 
 [tool.setuptools]
-packages = ["emberscan", "emberscan.core", "emberscan.extractors", "emberscan.emulators", "emberscan.scanners", "emberscan.reporters", "emberscan.utils", "emberscan.plugins"]
+packages = ["emberscan", "emberscan.core", "emberscan.extractors", "emberscan.emulators", "emberscan.dynamic", "emberscan.dynamic.detectors", "emberscan.scanners", "emberscan.reporters", "emberscan.utils", "emberscan.plugins"]
 include-package-data = true
 
 [tool.setuptools.package-data]
